@@ -96,10 +96,10 @@ fun SettingsScreen(
             title = { Text("修改 PIN") },
             text = {
                 Column {
-                    OutlinedTextField(p1, { p1 = it.filter(Char::isDigit).take(8) },
+                    OutlinedTextField(p1, { p1 = it.filter(Char::isDigit).take(256) },
                         label = { Text("新 PIN") },
                         visualTransformation = PasswordVisualTransformation())
-                    OutlinedTextField(p2, { p2 = it.filter(Char::isDigit).take(8) },
+                    OutlinedTextField(p2, { p2 = it.filter(Char::isDigit).take(256) },
                         label = { Text("再输一次") },
                         visualTransformation = PasswordVisualTransformation())
                 }

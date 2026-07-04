@@ -37,10 +37,10 @@ fun WizardScreen(
         when (step) {
             1 -> {
                 Text("第 1 步：设置家长 PIN（至少 4 位数字）", fontSize = 18.sp)
-                OutlinedTextField(p1, { p1 = it.filter(Char::isDigit).take(8) },
+                OutlinedTextField(p1, { p1 = it.filter(Char::isDigit).take(256) },
                     label = { Text("PIN") },
                     visualTransformation = PasswordVisualTransformation())
-                OutlinedTextField(p2, { p2 = it.filter(Char::isDigit).take(8) },
+                OutlinedTextField(p2, { p2 = it.filter(Char::isDigit).take(256) },
                     label = { Text("再输一次") },
                     visualTransformation = PasswordVisualTransformation())
                 Button(

@@ -36,7 +36,7 @@ fun PinDialog(
             androidx.compose.foundation.layout.Column {
                 OutlinedTextField(
                     value = pin,
-                    onValueChange = { pin = it.filter(Char::isDigit).take(8) },
+                    onValueChange = { pin = it.filter(Char::isDigit).take(256) },
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.NumberPassword),
                     singleLine = true,

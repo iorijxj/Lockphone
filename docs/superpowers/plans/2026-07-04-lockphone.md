@@ -1576,3 +1576,5 @@ Task 2 Step 4 若被 ROM 拦截且无法绕过：停止本计划，回到 brains
 3. **`SettingsScreen.kt`**：新增入参 `pinFailures: List<Long>`；操作按钮行新增「密码错误记录」按钮，点击弹出 `AlertDialog`：标题带总次数「密码错误记录（共 N 次）」，正文用 `LazyColumn`（`heightIn(max = 360.dp)`）倒序（最新在前）列出 `yyyy-MM-dd HH:mm:ss` 格式的时间戳，空列表时显示「暂无记录」。
 
 **验证：** `./gradlew :app:testDebugUnitTest` 与 `:app:assembleDebug` 均 BUILD SUCCESSFUL，无新增单测（`DataStore` 读写已有 Task 5/12 的既有模式覆盖，纯 UI 列表渲染无框架无关的可单测逻辑）。
+
+### Task 17: PIN 最大长度提升到 256 位
