@@ -122,6 +122,6 @@ class VolumeGuardService : Service() {
     companion object {
         private const val CHANNEL_ID = "volume_guard"
         private const val NOTIF_ID = 1001
-        private const val LOCK_FRACTION = 0.7
+        private const val LOCK_FRACTION = 0.5
     }
 }
