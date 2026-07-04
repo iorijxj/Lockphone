@@ -22,6 +22,7 @@
 - 用户限制：`DISALLOW_SAFE_BOOT`、`DISALLOW_FACTORY_RESET`，彻底解除时必须成对清除
 - git 提交走 Bash 工具，conventional commits 中文描述
 - Windows 环境；gradle 命令在 Bash 工具中用 `./gradlew`，adb 全路径 `$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe`（下文简写 `adb`，执行时若 PATH 未配置则用全路径）
+- 本构建锁定单台 API 29 设备：targetSdk 34 但未声明 `<queries>` 包可见性；若换 API 30+ 设备部署，必须先补 `<queries>` 声明，否则应用列表为空
 
 ## File Structure
 
@@ -194,7 +195,8 @@ dependencies {
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
-            android:stateNotNeeded="true">
+            android:stateNotNeeded="true"
+            android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -777,7 +779,7 @@ class LockController(private val context: Context) {
         if (am.lockTaskModeState != ActivityManager.LOCK_TASK_MODE_NONE) {
             activity.stopLockTask()
         }
-        setPersistentHome(false)
+        if (isDeviceOwner) setPersistentHome(false)
         activity.startActivity(
             Intent(Intent.ACTION_MAIN)
                 .addCategory(Intent.CATEGORY_HOME)
@@ -978,6 +980,7 @@ fun PinDialog(
 ) {
     var pin by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     AlertDialog(
@@ -997,19 +1000,25 @@ fun PinDialog(
         },
         confirmButton = {
             TextButton(onClick = {
+                if (busy) return@TextButton
                 if (!gate.canAttempt()) {
                     error = "错误次数过多，请 ${gate.remainingLockMs() / 1000} 秒后再试"
                     return@TextButton
                 }
+                busy = true
                 scope.launch {
-                    if (onVerify(pin)) {
-                        gate.recordSuccess()
-                        onSuccess()
-                    } else {
-                        gate.recordFailure()
-                        pin = ""
-                        error = if (gate.canAttempt()) "密码错误"
-                        else "错误次数过多，请 60 秒后再试"
+                    try {
+                        if (onVerify(pin)) {
+                            gate.recordSuccess()
+                            onSuccess()
+                        } else {
+                            gate.recordFailure()
+                            pin = ""
+                            error = if (gate.canAttempt()) "密码错误"
+                            else "错误次数过多，请 ${gate.remainingLockMs() / 1000} 秒后再试"
+                        }
+                    } finally {
+                        busy = false
                     }
                 }
             }) { Text("确定") }
@@ -1409,11 +1418,12 @@ git add -A && git commit -m "feat: 家长设置页、首次向导与主状态机
 
 1. 白名单 APP 从桌面点开正常使用，退出后回锁定桌面
 2. 白名单外 APP 不出现在桌面，且无法通过任何入口启动
-3. 家长模式按钮 → 正确 PIN 进入设置页；错误 PIN 5 次后冷却 60 秒
+3. 家长模式按钮 → 正确 PIN 进入设置页；错误 PIN 5 次后冷却 60 秒（冷却期间旋转屏幕/锁屏再解锁，冷却仍须生效）
 4. 设置页勾选/取消 APP，返回桌面即时生效
 5. 修改 PIN 后旧 PIN 失效、新 PIN 可用
 6. 临时退出锁定 → 到系统桌面；重新打开 Lockphone → 自动恢复锁定
 7. 系统「应用限时」对白名单 APP 生效（补 Task 2 Step 7 的完整验证）
+8. 向导完成进入锁定的瞬间，观察桌面是否闪烁/短暂锁死（Task 8 审查发现的白名单 Flow 竞态，理论上几毫秒自愈；若可感知则按审查报告的修复方向处理）
 
 - [ ] **Step 2: 孩子视角攻击清单（人工逐项）**
 
@@ -1446,3 +1456,125 @@ git add -A && git commit -m "docs: 整机验收结果"
 ## 降级路径（决策门失败时）
 
 Task 2 Step 4 若被 ROM 拦截且无法绕过：停止本计划，回到 brainstorming 重新设计软锁方案（普通 Launcher + `startLockTask` 屏幕固定模式 + 无障碍服务拦截设置页）。软锁方案另出 spec 与 plan，不在本文档范围。
+
+---
+
+### Task 10: 真机加固第一轮
+
+**背景：** vivo NEX S（Android 10 / OriginOS 1.0）真机验收暴露出若干 ROM 兼容性问题，本任务针对性修复，不改变整体架构。
+
+**改动清单：**
+
+1. **应用改名**（`AndroidManifest.xml`）：`android:label` 由 `Lockphone` 改为 `管住逆子的手`，仅影响桌面显示名，不动 `applicationId` / `rootProject.name`。
+
+2. **临时退出修复**（`LockController.kt` `temporaryExit`）：原实现用裸 `ACTION_MAIN` + `CATEGORY_HOME` 广播意图，OriginOS 上会把自己（本 APP 已注册 HOME）也解析进候选，导致退出常失败/原地打转。改为 `queryIntentActivities` 显式过滤掉自身包名，取系统真正的桌面 Launcher 组件后用显式 `Intent` 启动。
+
+3. **PIN 冷却持久化**（`PinGate.kt` + `SettingsRepository.kt` + `MainActivity.kt`）：原冷却状态只存在内存变量，OriginOS 后台回收/旋转屏幕重建 Activity 后 `lockedUntil` 归零，孩子可借旋转屏幕绕过冷却。`PinGate` 新增 `initialLockedUntil` 构造参数、`restore()` 方法与 `onLockedUntilChanged` 回调；`SettingsRepository` 新增 `COOLDOWN_UNTIL`（`longPreferencesKey`）及 `getCooldownUntil` / `setCooldownUntil`；`MainActivity` 在 `onCreate` 中用 `lifecycleScope` 恢复冷却时间，并在冷却状态变化时写回 DataStore，跨进程重建后冷却仍然生效。
+
+4. **Kiosk 兜底**（`AndroidManifest.xml` 权限 + `MainActivity.onStop`）：OriginOS 的全面屏手势/多任务卡片可绕过 Lock Task 直接把本 APP 切到后台。新增 `REORDER_TASKS` 权限，`MainActivity` 重写 `onStop`，只要不是主动临时退出（`lockPaused`）或正在结束（`isFinishing`），立即 `moveTaskToFront` 把任务拉回前台，作为系统级锁定之外的应用层兜底。
+
+**验证：** `PinGateTest.kt` 新增 3 个用例覆盖 `initialLockedUntil`、锁定触发回调、`recordSuccess` 回调归零；`./gradlew :app:testDebugUnitTest` 与 `:app:assembleDebug` 均 BUILD SUCCESSFUL。`LockController`/`MainActivity` 的改动依赖 Android 框架类（`PackageManager`、`ActivityManager`、`lifecycleScope`），无本地单测覆盖，需真机复测确认（第二轮真机验收）。
+
+### Task 11: 锁定竖屏开关
+
+**背景：** 用户反馈自动旋转体验很烦，希望家长设置页里加一个开关，锁定屏幕为竖屏（关闭自动旋转），默认开启；开关藏在 PIN 保护的设置页内，孩子碰不到。
+
+**改动清单：**
+
+1. **`SettingsRepository.kt`**：新增 `ORIENTATION_LOCKED`（`booleanPreferencesKey("orientation_locked")`），暴露 `orientationLocked: Flow<Boolean>`（默认 `true`）与 `setOrientationLocked(locked: Boolean)`，风格与已有 `whitelist` Flow/setter 一致。
+
+2. **`SettingsScreen.kt`**：新增入参 `orientationLocked: Boolean` 与 `onOrientationToggle: (Boolean) -> Unit`；在顶部操作按钮下方、白名单列表上方插入一行 Material3 `Switch`，文案“锁定竖屏（关闭自动旋转）”。
+
+3. **`MainActivity.kt`**：`collectAsState` 订阅 `repo.orientationLocked`（初值 `true`）；新增 `LaunchedEffect(orientationLocked)`，据此把 `requestedOrientation` 切换为 `SCREEN_ORIENTATION_PORTRAIT` 或 `SCREEN_ORIENTATION_UNSPECIFIED`；`SettingsScreen` 调用处透传状态与回调，回调用现有 `scope` 写回 DataStore。
+
+**验证：** `./gradlew :app:testDebugUnitTest` 与 `:app:assembleDebug` 均 BUILD SUCCESSFUL，无新增单测（纯 UI/持久化接线，DataStore 与 `requestedOrientation` 依赖 Android 框架，留待真机复测）。
+
+### Task 12: 锁定音量开关
+
+**背景：** 家长希望限制孩子随意调节系统音量，在家长设置页里加一个「锁定音量」开关，默认开启；与 Task 11 的锁定竖屏开关同源同构，藏在 PIN 保护的设置页内。
+
+**改动清单：**
+
+1. **`LockController.kt`**：新增 `setVolumeLocked(locked: Boolean)`，Device Owner 下用 `dpm.addUserRestriction` / `dpm.clearUserRestriction` 切换 `UserManager.DISALLOW_ADJUST_VOLUME`；`releaseDeviceOwner()` 中同步补上该限制的清除，与 `DISALLOW_SAFE_BOOT` / `DISALLOW_FACTORY_RESET` 成对，保证「彻底解除」完全恢复手机。
+
+2. **`SettingsRepository.kt`**：新增 `VOLUME_LOCKED`（`booleanPreferencesKey("volume_locked")`），暴露 `volumeLocked: Flow<Boolean>`（默认 `true`）与 `setVolumeLocked(locked: Boolean)`，风格与 `orientationLocked` 完全一致。
+
+3. **`SettingsScreen.kt`**：新增入参 `volumeLocked: Boolean` 与 `onVolumeToggle: (Boolean) -> Unit`；紧跟在「锁定竖屏」开关行之后插入一行同样式 `Switch`，文案“锁定音量（禁止调节音量）”。
+
+4. **`MainActivity.kt`**：`collectAsState` 订阅 `repo.volumeLocked`（初值 `true`）；新增 `LaunchedEffect(volumeLocked)` 调用 `lock.setVolumeLocked(volumeLocked)`；`SettingsScreen` 调用处透传状态与回调，回调复用现有 `scope` 写回 DataStore。
+
+**验证：** `./gradlew :app:testDebugUnitTest` 与 `:app:assembleDebug` 均 BUILD SUCCESSFUL，无新增单测（`DevicePolicyManager` 用户限制依赖 Android 框架，`DISALLOW_ADJUST_VOLUME` 在 OriginOS 上的实际拦截效果需真机复测确认）。
+
+### Task 13: 蓝牙感知媒体音量控制
+
+**背景：** Task 12 的「锁定音量」开关是非黑即白的全锁（`DISALLOW_ADJUST_VOLUME`）。但家长实际诉求更细：接了蓝牙音箱/耳机听歌时不该完全锁死音量（外放设备音量本就该能调），而是把媒体音量夹在 [50%, 100%] 之间，防止孩子调到很小听不清或静音；没接蓝牙时冻结媒体音量在当前值。本任务把开关语义从「是否全锁音量」升级为「音量策略总开关」，具体策略由是否检测到蓝牙 A2DP 输出设备决定，且**只控制 `STREAM_MUSIC`（媒体音量），不触碰铃声/闹钟/通知音量**。
+
+**策略（仅作用于 STREAM_MUSIC / 媒体音量，纯 clamp，不使用 `DISALLOW_ADJUST_VOLUME`）：**
+- 开关 OFF → 完全不干预媒体音量
+- 开关 ON + 已连接蓝牙 A2DP 输出 → 媒体音量一旦低于系统最大音量的 50% 就立即拉回 50%（上限即系统最大值，无需处理）
+- 开关 ON + 未连接蓝牙 A2DP → 冻结媒体音量在进入该状态时的当前值：孩子按音量键调低/调高后，`ContentObserver` 立即把它拉回冻结值，形成"按了但弹回"的观感
+
+**为什么放弃 `DISALLOW_ADJUST_VOLUME`（Code Review 修正）：** 该 User Restriction 是全局的，一旦施加会连带锁死铃声、闹钟、通知音量，与"只控媒体音量"的 spec 矛盾（Important 级别 review 发现）。改为在 Service 内部维护 `lockedMediaVolume: Int?` 状态，靠 `ContentObserver` 检测到音量变化后用 `setStreamVolume` 把 `STREAM_MUSIC` 拉回目标值实现"冻结"，不再调用限制类 API，也就完全不影响其他音频流。
+
+**为什么要用前台 Service：** 该策略需要在孩子处于白名单 APP（本 Activity 退到后台）时持续生效——音量条随时可能被调、蓝牙耳机随时可能被摘下，靠 Activity 生命周期挂钩的 `LaunchedEffect` 覆盖不到后台场景。因此把策略执行下沉到独立前台 Service，用 `ContentObserver` 监听系统音量变化、用 `AudioManager.registerAudioDeviceCallback` 监听蓝牙 A2DP 设备插拔，任一事件触发即重新评估并应用策略。蓝牙检测走 `AudioManager.getDevices(GET_DEVICES_OUTPUTS)` 判断 `AudioDeviceInfo.TYPE_BLUETOOTH_A2DP`，不声明蓝牙权限。
+
+**改动清单：**
+
+1. **`LockController.kt`**：`setVolumeLocked(locked: Boolean)` 更名为 `setVolumeAdjustRestricted(restricted: Boolean)`，方法体不变（仍是 Device Owner 下 add/clear `DISALLOW_ADJUST_VOLUME`）。迁移到纯 clamp 方案后该方法不再是常规策略路径，仅保留给 Service `onCreate` 调用一次 `setVolumeAdjustRestricted(false)` 用于清除 Task 12 遗留的全局限制（历史升级用户的兼容处理）；`releaseDeviceOwner()` 中对该限制的清除也保持不变（同样是清理历史状态，无害）。
+
+2. **新增 `audio/VolumeGuardService.kt`**：前台 Service，持有 `lockedMediaVolume: Int?` 记录无蓝牙状态下的冻结音量。`onCreate` 中启动前台通知（`IMPORTANCE_MIN` 静默渠道），先调用一次 `lock.setVolumeAdjustRestricted(false)` 清理遗留限制；随后在协程里**先 `repo.volumeLocked.first()` 拿到真实初始值赋给 `volumeLocked`，再注册 `ContentObserver` / `AudioDeviceCallback`，再 `applyPolicy()` 应用一次，最后订阅 `repo.volumeLocked.drop(1)` 的后续变化**——这个顺序是为了修另一处 Code Review 发现的竞态：若先注册回调、Flow 默认值 `true` 还没被真实值覆盖时设备回调抢先触发，会在开关实际是 OFF 的情况下误触发一次 clamp。`applyPolicy()` 改为三态 clamp 逻辑：开关 OFF 清空 `lockedMediaVolume`、不做任何操作；开关 ON + 蓝牙 A2DP 已连接则清空 `lockedMediaVolume` 并在 `cur < min` 时 `setStreamVolume` 拉回 `min = round(max * 0.5).coerceAtLeast(1)`；开关 ON + 无蓝牙则取 `lockedMediaVolume ?: cur`（首次进入该分支记录当前值为冻结目标），若 `cur != target` 就拉回 target。`onStartCommand` 返回 `START_STICKY`；新增 `registered: Boolean` 标记，`onDestroy` 仅在 `registered` 为真时才注销 Observer/Callback（因为注册被推迟到协程内部，避免协程还没跑到注册那一步就 `onDestroy` 导致注销未注册对象抛异常）。
+
+3. **`AndroidManifest.xml`**：新增 `FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_SPECIAL_USE` 权限；注册 `VolumeGuardService`（`exported=false`，`foregroundServiceType="specialUse"`，子类型 `parental_media_volume_control`）。
+
+4. **`MainActivity.kt`**：移除 Task 12 遗留的 `LaunchedEffect(volumeLocked) { lock.setVolumeLocked(volumeLocked) }` 直接调用——音量策略的施加权完全交给 Service。启动 `VolumeGuardService` 的 `LaunchedEffect` 从 `LaunchedEffect(Unit)`（WIZARD 阶段就会跑）改为 `LaunchedEffect(screen) { if (screen == Screen.LAUNCHER) startForegroundService(...) }`，只在进入锁定桌面时才拉起 Service，避免设置向导阶段就常驻通知。`volumeLocked` 仍从 `repo.volumeLocked` 订阅并透传给 `SettingsScreen` 驱动开关 UI 与写回 DataStore，Service 侧监听同一个 Flow 各自应用策略，两边通过 DataStore 解耦。
+
+5. **`SettingsRepository.kt`**：`volumeLocked` Flow 追加 `.distinctUntilChanged()`，避免 DataStore 里其他键（如白名单）的无关写入触发一次多余的 `applyPolicy()`。
+
+**验证：** `./gradlew :app:testDebugUnitTest` 与 `:app:assembleDebug` 均 BUILD SUCCESSFUL，无新增单测（`AudioManager`/`AudioDeviceCallback`/前台 Service 生命周期依赖 Android 框架，蓝牙 A2DP 插拔检测、无蓝牙下"冻结音量回弹"手感、Service 在 OriginOS 后台存活情况均需真机复测确认）。
+
+### Task 14: v3 反馈修复（移除兜底/音量70%/开机自启）
+
+**背景：** 真机 v3 复测反馈三项问题：Task 10 加的 `onStop` kiosk 兜底会误伤白名单 APP（孩子点开白名单 APP → 本 Activity 退到后台触发 `onStop` → `moveTaskToFront` 把 Lockphone 抢回前台，白名单 APP 完全打不开）；音量冻结/下限从 50% 调高到 70%；新增开机自启尝试。
+
+**改动清单：**
+
+1. **移除 kiosk 兜底**（`MainActivity.kt`）：三键导航下最近任务手势本就被 Lock Task 拦住，且本 APP 是 persistent HOME，Home 键天然回到自己，`onStop` 里的 `moveTaskToFront` 兜底纯属多余且会误伤——只要孩子点开白名单 APP，本 Activity 就会被这段代码强行拉回前台。整段删除 `override fun onStop() { ... }`；`onResume` 里 `lockPaused` 复位与 `resumeTick` 自增（临时退出恢复用）保持不动。`AndroidManifest.xml` 同步移除不再需要的 `android.permission.REORDER_TASKS`。
+
+2. **音量锚点提到 70%**（`VolumeGuardService.kt`）：`MIN_FRACTION = 0.5` 改名并改值为 `LOCK_FRACTION = 0.7`。蓝牙已连接分支不变逻辑，只是下限从 50% 提到 70%（`min = round(max * 0.7).coerceAtLeast(1)`，上限仍是系统最大值，可调到 100%）。无蓝牙分支从"记录进入时的当前值再冻结"改为直接锚定固定目标 `target = round(max * 0.7).coerceAtLeast(1)`，删除 `lockedMediaVolume: Int?` 字段及其 `?: cur.also { ... }` 逻辑——现在无论从哪个音量值进入该分支，都会被拉回固定的 70%，而不是冻结在进入时的任意值。OFF 分支不再需要重置 `lockedMediaVolume`（字段已删除），逻辑简化为空操作。
+
+3. **开机自启**（新增 `boot/BootReceiver.kt` + `AndroidManifest.xml`）：新增 `BroadcastReceiver` 监听 `BOOT_COMPLETED`，收到后用 `FLAG_ACTIVITY_NEW_TASK` 拉起 `MainActivity`。Manifest 新增 `RECEIVE_BOOT_COMPLETED` 权限与 `exported=true` 的 receiver 声明。**已知限制：** OriginOS（vivo）等厂商 ROM 默认限制后台应用接收 `BOOT_COMPLETED` 广播，通常需要用户在「设置 → 应用管理 → Lockphone → 自启动」手动授权该权限，此接收器才会实际触发；纯软件层面无法绕过这个厂商限制，真机复测需人工确认自启动权限已开启。
+
+**验证：** `./gradlew :app:testDebugUnitTest` 与 `:app:assembleDebug` 均 BUILD SUCCESSFUL。`onStop` 删除、`BootReceiver` 均依赖 Android 框架生命周期/广播机制，无本地单测覆盖；三项均需真机复测：白名单 APP 是否可正常打开使用、Home 键行为是否仍符合预期、音量锚点是否感知为 70%、开机自启在授权/未授权自启动权限两种情况下的实际表现。
+
+### Task 15: 限额兜底提示
+
+**背景：** v3 复测反馈——孩子点白名单 APP 图标，若 OriginOS 的应用时长限额已触发，系统会静默拦截该 APP 前台化（我们已确认无法从系统读到"限额已用尽"这个状态，没有官方 API 或可靠间接信号可查）。此时点击图标毫无反应，孩子会盯着一个"点了没反应"的死图标，不知道发生了什么。本任务加一个启发式兜底：点了图标之后，用"本 Activity 是否成功退到后台"这个可观察信号，反推"启动到底有没有生效"，没生效就弹一个解释性提示，而不是放任孩子对着死图标发呆。
+
+**启发式检测逻辑（`MainActivity.kt`）：**
+- `LauncherScreen` 的 `onLaunch(pkg)` 回调里：先 `appList.launch(pkg)` 照常发起启动，再把 `pkg` 记到类级别的 `pendingLaunch: MutableState<String?>` 上，然后用 `scope`（`rememberCoroutineScope`）起一个协程 `delay(1500)` 后检查——如果 `pendingLaunch.value` 还没被清空，说明这 1.5 秒内本 Activity 从未真正退到后台，即启动大概率没生效，于是清空 `pendingLaunch` 并把 `showLimitDialog` 置 `true`。
+- `pendingLaunch` 之所以放在 Activity 类级别而非 `remember` 里，是因为要让 `onPause()` 能直接清掉它：只要启动真的成功，系统会在 APP 切走时回调 `onPause()`，这里立刻 `pendingLaunch.value = null`，1.5 秒后的检查就会发现"已经清空了"从而什么都不做——这是判断"启动成功"的唯一信号来源。
+- `showLimitDialog` 为 `true` 时在 LAUNCHER 分支渲染一个 `AlertDialog`：标题「暂时打不开」，正文「该应用今日可能已达使用限额，请稍后再试或让家长检查。」，一个「知道了」按钮关闭。
+
+**已知的不精确性（需真机复测确认，不是理论上可消除的）：**
+- 这是纯粹的时间窗口启发式，不是真正读到了限额状态——1.5 秒只是一个经验阈值，换不同机型、不同 APP 冷启动耗时会有出入。
+- **假阳性风险：** 某些 APP（尤其大型 APP 冷启动、或设备负载高时）前台化耗时可能超过 1.5 秒，会被误判为"被限额拦截"而弹出兜底提示，实际上 APP 只是慢；需要真机用几个偏重的白名单 APP（如游戏、地图类）测试冷启动是否会误触发。
+- **假阴性风险：** 如果 OriginOS 的拦截机制并非"完全不启动"而是"启动后极快速地把本 Activity 重新拉回前台"（例如短暂展示一个系统提示层后又切回来），1.5 秒内可能被误判为"启动成功"从而不弹提示，孩子依然看不到解释。
+- 需要真机验证两个方向：(a) 正常未达限额的白名单 APP 点击后不应误弹提示；(b) 人为把某个白名单 APP 的系统时长限额跑满后点击，应该弹出提示。若 1500ms 阈值经验证过短/过长，后续可调整为常量并按真机实测结果微调。
+
+**验证：** `./gradlew :app:testDebugUnitTest` 与 `:app:assembleDebug` 均 BUILD SUCCESSFUL，无新增单测（纯 UI 时序启发式，依赖 Activity 生命周期回调与真实系统限额拦截行为，无法在 JVM 单测里模拟，只能真机复测）。
+
+### Task 16: PIN 错误记录统计
+
+**背景：** 家长想知道孩子有没有在偷偷试密码、试了多少次。本任务记录每次家长模式验证 PIN 失败的时间戳，并在设置页提供一个入口查看完整列表和总次数。只记录家长模式验证入口（`LauncherScreen` 点「家长模式」弹出的 `PinDialog`）的失败，不记录设置页内「修改 PIN」流程——后者不是一次未授权访问尝试。
+
+**改动清单：**
+
+1. **`SettingsRepository.kt`**：新增 `stringPreferencesKey("pin_failures")`（`Keys.PIN_FAILURES`），值为换行分隔的 epoch 毫秒时间戳字符串，FIFO 上限 `MAX_PIN_FAILURES = 100`（超过丢最旧的）。暴露 `val pinFailures: Flow<List<Long>>`（按写入顺序，最新的在最后）与 `suspend fun recordPinFailure(timestamp: Long)`。
+
+2. **`MainActivity.kt`**：家长模式验证 `PinDialog` 的 `onVerify` 从 `{ repo.verifyPin(it) }` 改为先校验、失败时调用 `repo.recordPinFailure(System.currentTimeMillis())` 再返回结果；`collectAsState` 新增订阅 `repo.pinFailures`（初值 `emptyList()`），透传给 `SettingsScreen` 新增的 `pinFailures` 入参。
+
+3. **`SettingsScreen.kt`**：新增入参 `pinFailures: List<Long>`；操作按钮行新增「密码错误记录」按钮，点击弹出 `AlertDialog`：标题带总次数「密码错误记录（共 N 次）」，正文用 `LazyColumn`（`heightIn(max = 360.dp)`）倒序（最新在前）列出 `yyyy-MM-dd HH:mm:ss` 格式的时间戳，空列表时显示「暂无记录」。
+
+**验证：** `./gradlew :app:testDebugUnitTest` 与 `:app:assembleDebug` 均 BUILD SUCCESSFUL，无新增单测（`DataStore` 读写已有 Task 5/12 的既有模式覆盖，纯 UI 列表渲染无框架无关的可单测逻辑）。
+
+### Task 17: PIN 最大长度提升到 256 位
