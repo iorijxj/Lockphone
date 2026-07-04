@@ -1,6 +1,7 @@
 package com.lockphone.data
 
 import android.content.Context
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.longPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
@@ -22,6 +23,7 @@ class SettingsRepository(private val context: Context) {
         val PIN_HASH = stringPreferencesKey("pin_hash")
         val WHITELIST = stringSetPreferencesKey("whitelist")
         val COOLDOWN_UNTIL = longPreferencesKey("cooldown_until")
+        val ORIENTATION_LOCKED = booleanPreferencesKey("orientation_locked")
     }
 
     val whitelist: Flow<Set<String>> =
@@ -29,6 +31,13 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setWhitelist(packages: Set<String>) {
         context.dataStore.edit { it[Keys.WHITELIST] = packages }
+    }
+
+    val orientationLocked: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.ORIENTATION_LOCKED] ?: true }
+
+    suspend fun setOrientationLocked(locked: Boolean) {
+        context.dataStore.edit { it[Keys.ORIENTATION_LOCKED] = locked }
     }
 
     suspend fun isPinSet(): Boolean =

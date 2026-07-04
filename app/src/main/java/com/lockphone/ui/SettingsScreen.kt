@@ -11,6 +11,7 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -34,6 +35,8 @@ fun SettingsScreen(
     onTemporaryExit: () -> Unit,
     onRelease: () -> Unit,
     onBack: () -> Unit,
+    orientationLocked: Boolean,
+    onOrientationToggle: (Boolean) -> Unit,
 ) {
     var showPinChange by remember { mutableStateOf(false) }
     var showReleaseConfirm by remember { mutableStateOf(false) }
@@ -51,6 +54,10 @@ fun SettingsScreen(
                 Text("临时退出锁定")
             }
             Button(onClick = { showReleaseConfirm = true }) { Text("彻底解除") }
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 8.dp)) {
+            Text("锁定竖屏（关闭自动旋转）", modifier = Modifier.weight(1f))
+            Switch(checked = orientationLocked, onCheckedChange = onOrientationToggle)
         }
         Text("白名单（勾选后出现在孩子桌面）", modifier = Modifier.padding(vertical = 8.dp))
         LazyColumn {

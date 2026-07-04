@@ -1474,3 +1474,17 @@ Task 2 Step 4 若被 ROM 拦截且无法绕过：停止本计划，回到 brains
 4. **Kiosk 兜底**（`AndroidManifest.xml` 权限 + `MainActivity.onStop`）：OriginOS 的全面屏手势/多任务卡片可绕过 Lock Task 直接把本 APP 切到后台。新增 `REORDER_TASKS` 权限，`MainActivity` 重写 `onStop`，只要不是主动临时退出（`lockPaused`）或正在结束（`isFinishing`），立即 `moveTaskToFront` 把任务拉回前台，作为系统级锁定之外的应用层兜底。
 
 **验证：** `PinGateTest.kt` 新增 3 个用例覆盖 `initialLockedUntil`、锁定触发回调、`recordSuccess` 回调归零；`./gradlew :app:testDebugUnitTest` 与 `:app:assembleDebug` 均 BUILD SUCCESSFUL。`LockController`/`MainActivity` 的改动依赖 Android 框架类（`PackageManager`、`ActivityManager`、`lifecycleScope`），无本地单测覆盖，需真机复测确认（第二轮真机验收）。
+
+### Task 11: 锁定竖屏开关
+
+**背景：** 用户反馈自动旋转体验很烦，希望家长设置页里加一个开关，锁定屏幕为竖屏（关闭自动旋转），默认开启；开关藏在 PIN 保护的设置页内，孩子碰不到。
+
+**改动清单：**
+
+1. **`SettingsRepository.kt`**：新增 `ORIENTATION_LOCKED`（`booleanPreferencesKey("orientation_locked")`），暴露 `orientationLocked: Flow<Boolean>`（默认 `true`）与 `setOrientationLocked(locked: Boolean)`，风格与已有 `whitelist` Flow/setter 一致。
+
+2. **`SettingsScreen.kt`**：新增入参 `orientationLocked: Boolean` 与 `onOrientationToggle: (Boolean) -> Unit`；在顶部操作按钮下方、白名单列表上方插入一行 Material3 `Switch`，文案“锁定竖屏（关闭自动旋转）”。
+
+3. **`MainActivity.kt`**：`collectAsState` 订阅 `repo.orientationLocked`（初值 `true`）；新增 `LaunchedEffect(orientationLocked)`，据此把 `requestedOrientation` 切换为 `SCREEN_ORIENTATION_PORTRAIT` 或 `SCREEN_ORIENTATION_UNSPECIFIED`；`SettingsScreen` 调用处透传状态与回调，回调用现有 `scope` 写回 DataStore。
+
+**验证：** `./gradlew :app:testDebugUnitTest` 与 `:app:assembleDebug` 均 BUILD SUCCESSFUL，无新增单测（纯 UI/持久化接线，DataStore 与 `requestedOrientation` 依赖 Android 框架，留待真机复测）。
