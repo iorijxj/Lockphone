@@ -45,7 +45,7 @@ class LockController(private val context: Context) {
         if (am.lockTaskModeState != ActivityManager.LOCK_TASK_MODE_NONE) {
             activity.stopLockTask()
         }
-        setPersistentHome(false)
+        if (isDeviceOwner) setPersistentHome(false)
         activity.startActivity(
             Intent(Intent.ACTION_MAIN)
                 .addCategory(Intent.CATEGORY_HOME)
