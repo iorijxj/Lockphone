@@ -43,9 +43,9 @@ class MainActivity : ComponentActivity() {
     private val lockPaused = mutableStateOf(false)
     private val resumeTick = mutableStateOf(0)
 
-    // 限额兜底提示（Task 15）：记录刚发起、尚未确认成功的白名单 APP 启动；
-    // 若 onPause 成功回调（真正退到后台）说明启动生效，清空该标记
-    private val pendingLaunch = mutableStateOf<String?>(null)
+    // 限额兜底提示（Task 15）：generation counter 防止连点时的竞态条件
+    // 每次发起启动递增，onPause 时再递增；等待中的 delay 检查 generation 是否仍匹配
+    private var launchGeneration = 0
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -102,13 +102,10 @@ class MainActivity : ComponentActivity() {
                         apps = allApps.filter { it.packageName in whitelist },
                         onLaunch = { pkg ->
                             appList.launch(pkg)
-                            pendingLaunch.value = pkg
+                            val gen = ++launchGeneration
                             scope.launch {
                                 delay(1500)
-                                if (pendingLaunch.value != null) {
-                                    pendingLaunch.value = null
-                                    showLimitDialog = true
-                                }
+                                if (launchGeneration == gen) showLimitDialog = true
                             }
                         },
                         onParentClick = { showPinDialog = true },
@@ -175,7 +172,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onPause() {
         super.onPause()
-        // 成功退到后台说明刚才的 launch(pkg) 生效了，清空限额兜底的待确认标记
-        pendingLaunch.value = null
+        // 成功退到后台说明刚才的 launch(pkg) 生效了，递增 generation 使任何在途的延迟检查失效
+        launchGeneration++
     }
 }
