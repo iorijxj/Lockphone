@@ -145,12 +145,4 @@ class MainActivity : ComponentActivity() {
         lockPaused.value = false
         resumeTick.value++
     }
-
-    override fun onStop() {
-        super.onStop()
-        if (!lockPaused.value && !isFinishing) {
-            val am = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
-            am.moveTaskToFront(taskId, 0)
-        }
-    }
 }

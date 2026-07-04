@@ -32,7 +32,6 @@ class VolumeGuardService : Service() {
     private lateinit var lock: LockController
     private lateinit var repo: SettingsRepository
     private var volumeLocked = true
-    private var lockedMediaVolume: Int? = null
     private var registered = false
 
     private val handler = Handler(Looper.getMainLooper())
@@ -75,16 +74,13 @@ class VolumeGuardService : Service() {
         val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
         val cur = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
         when {
-            !volumeLocked -> {
-                lockedMediaVolume = null
-            }
+            !volumeLocked -> {}
             isBluetoothA2dpConnected() -> {
-                lockedMediaVolume = null
-                val min = (max * MIN_FRACTION).roundToInt().coerceAtLeast(1)
+                val min = (max * LOCK_FRACTION).roundToInt().coerceAtLeast(1)
                 if (cur < min) audio.setStreamVolume(AudioManager.STREAM_MUSIC, min, 0)
             }
             else -> {
-                val target = lockedMediaVolume ?: cur.also { lockedMediaVolume = it }
+                val target = (max * LOCK_FRACTION).roundToInt().coerceAtLeast(1)
                 if (cur != target) audio.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
             }
         }
@@ -119,6 +115,6 @@ class VolumeGuardService : Service() {
     companion object {
         private const val CHANNEL_ID = "volume_guard"
         private const val NOTIF_ID = 1001
-        private const val MIN_FRACTION = 0.5
+        private const val LOCK_FRACTION = 0.7
     }
 }

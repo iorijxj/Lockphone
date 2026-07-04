@@ -1531,3 +1531,17 @@ Task 2 Step 4 若被 ROM 拦截且无法绕过：停止本计划，回到 brains
 5. **`SettingsRepository.kt`**：`volumeLocked` Flow 追加 `.distinctUntilChanged()`，避免 DataStore 里其他键（如白名单）的无关写入触发一次多余的 `applyPolicy()`。
 
 **验证：** `./gradlew :app:testDebugUnitTest` 与 `:app:assembleDebug` 均 BUILD SUCCESSFUL，无新增单测（`AudioManager`/`AudioDeviceCallback`/前台 Service 生命周期依赖 Android 框架，蓝牙 A2DP 插拔检测、无蓝牙下"冻结音量回弹"手感、Service 在 OriginOS 后台存活情况均需真机复测确认）。
+
+### Task 14: v3 反馈修复（移除兜底/音量70%/开机自启）
+
+**背景：** 真机 v3 复测反馈三项问题：Task 10 加的 `onStop` kiosk 兜底会误伤白名单 APP（孩子点开白名单 APP → 本 Activity 退到后台触发 `onStop` → `moveTaskToFront` 把 Lockphone 抢回前台，白名单 APP 完全打不开）；音量冻结/下限从 50% 调高到 70%；新增开机自启尝试。
+
+**改动清单：**
+
+1. **移除 kiosk 兜底**（`MainActivity.kt`）：三键导航下最近任务手势本就被 Lock Task 拦住，且本 APP 是 persistent HOME，Home 键天然回到自己，`onStop` 里的 `moveTaskToFront` 兜底纯属多余且会误伤——只要孩子点开白名单 APP，本 Activity 就会被这段代码强行拉回前台。整段删除 `override fun onStop() { ... }`；`onResume` 里 `lockPaused` 复位与 `resumeTick` 自增（临时退出恢复用）保持不动。`AndroidManifest.xml` 同步移除不再需要的 `android.permission.REORDER_TASKS`。
+
+2. **音量锚点提到 70%**（`VolumeGuardService.kt`）：`MIN_FRACTION = 0.5` 改名并改值为 `LOCK_FRACTION = 0.7`。蓝牙已连接分支不变逻辑，只是下限从 50% 提到 70%（`min = round(max * 0.7).coerceAtLeast(1)`，上限仍是系统最大值，可调到 100%）。无蓝牙分支从"记录进入时的当前值再冻结"改为直接锚定固定目标 `target = round(max * 0.7).coerceAtLeast(1)`，删除 `lockedMediaVolume: Int?` 字段及其 `?: cur.also { ... }` 逻辑——现在无论从哪个音量值进入该分支，都会被拉回固定的 70%，而不是冻结在进入时的任意值。OFF 分支不再需要重置 `lockedMediaVolume`（字段已删除），逻辑简化为空操作。
+
+3. **开机自启**（新增 `boot/BootReceiver.kt` + `AndroidManifest.xml`）：新增 `BroadcastReceiver` 监听 `BOOT_COMPLETED`，收到后用 `FLAG_ACTIVITY_NEW_TASK` 拉起 `MainActivity`。Manifest 新增 `RECEIVE_BOOT_COMPLETED` 权限与 `exported=true` 的 receiver 声明。**已知限制：** OriginOS（vivo）等厂商 ROM 默认限制后台应用接收 `BOOT_COMPLETED` 广播，通常需要用户在「设置 → 应用管理 → Lockphone → 自启动」手动授权该权限，此接收器才会实际触发；纯软件层面无法绕过这个厂商限制，真机复测需人工确认自启动权限已开启。
+
+**验证：** `./gradlew :app:testDebugUnitTest` 与 `:app:assembleDebug` 均 BUILD SUCCESSFUL。`onStop` 删除、`BootReceiver` 均依赖 Android 框架生命周期/广播机制，无本地单测覆盖；三项均需真机复测：白名单 APP 是否可正常打开使用、Home 键行为是否仍符合预期、音量锚点是否感知为 70%、开机自启在授权/未授权自启动权限两种情况下的实际表现。
