@@ -24,6 +24,7 @@ class SettingsRepository(private val context: Context) {
         val WHITELIST = stringSetPreferencesKey("whitelist")
         val COOLDOWN_UNTIL = longPreferencesKey("cooldown_until")
         val ORIENTATION_LOCKED = booleanPreferencesKey("orientation_locked")
+        val VOLUME_LOCKED = booleanPreferencesKey("volume_locked")
     }
 
     val whitelist: Flow<Set<String>> =
@@ -38,6 +39,13 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setOrientationLocked(locked: Boolean) {
         context.dataStore.edit { it[Keys.ORIENTATION_LOCKED] = locked }
+    }
+
+    val volumeLocked: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.VOLUME_LOCKED] ?: true }
+
+    suspend fun setVolumeLocked(locked: Boolean) {
+        context.dataStore.edit { it[Keys.VOLUME_LOCKED] = locked }
     }
 
     suspend fun isPinSet(): Boolean =

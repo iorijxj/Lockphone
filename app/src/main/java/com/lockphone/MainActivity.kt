@@ -45,6 +45,7 @@ class MainActivity : ComponentActivity() {
             var showPinDialog by remember { mutableStateOf(false) }
             val whitelist by repo.whitelist.collectAsState(initial = emptySet())
             val orientationLocked by repo.orientationLocked.collectAsState(initial = true)
+            val volumeLocked by repo.volumeLocked.collectAsState(initial = true)
             val scope = rememberCoroutineScope()
             val allApps = remember { appList.launchableApps() }
 
@@ -67,6 +68,8 @@ class MainActivity : ComponentActivity() {
                     if (orientationLocked) android.content.pm.ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
                     else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             }
+
+            LaunchedEffect(volumeLocked) { lock.setVolumeLocked(volumeLocked) }
 
             when (screen) {
                 Screen.LOADING -> {}
@@ -124,6 +127,8 @@ class MainActivity : ComponentActivity() {
                     onBack = { screen = Screen.LAUNCHER },
                     orientationLocked = orientationLocked,
                     onOrientationToggle = { scope.launch { repo.setOrientationLocked(it) } },
+                    volumeLocked = volumeLocked,
+                    onVolumeToggle = { scope.launch { repo.setVolumeLocked(it) } },
                 )
             }
         }

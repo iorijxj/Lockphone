@@ -1488,3 +1488,19 @@ Task 2 Step 4 若被 ROM 拦截且无法绕过：停止本计划，回到 brains
 3. **`MainActivity.kt`**：`collectAsState` 订阅 `repo.orientationLocked`（初值 `true`）；新增 `LaunchedEffect(orientationLocked)`，据此把 `requestedOrientation` 切换为 `SCREEN_ORIENTATION_PORTRAIT` 或 `SCREEN_ORIENTATION_UNSPECIFIED`；`SettingsScreen` 调用处透传状态与回调，回调用现有 `scope` 写回 DataStore。
 
 **验证：** `./gradlew :app:testDebugUnitTest` 与 `:app:assembleDebug` 均 BUILD SUCCESSFUL，无新增单测（纯 UI/持久化接线，DataStore 与 `requestedOrientation` 依赖 Android 框架，留待真机复测）。
+
+### Task 12: 锁定音量开关
+
+**背景：** 家长希望限制孩子随意调节系统音量，在家长设置页里加一个「锁定音量」开关，默认开启；与 Task 11 的锁定竖屏开关同源同构，藏在 PIN 保护的设置页内。
+
+**改动清单：**
+
+1. **`LockController.kt`**：新增 `setVolumeLocked(locked: Boolean)`，Device Owner 下用 `dpm.addUserRestriction` / `dpm.clearUserRestriction` 切换 `UserManager.DISALLOW_ADJUST_VOLUME`；`releaseDeviceOwner()` 中同步补上该限制的清除，与 `DISALLOW_SAFE_BOOT` / `DISALLOW_FACTORY_RESET` 成对，保证「彻底解除」完全恢复手机。
+
+2. **`SettingsRepository.kt`**：新增 `VOLUME_LOCKED`（`booleanPreferencesKey("volume_locked")`），暴露 `volumeLocked: Flow<Boolean>`（默认 `true`）与 `setVolumeLocked(locked: Boolean)`，风格与 `orientationLocked` 完全一致。
+
+3. **`SettingsScreen.kt`**：新增入参 `volumeLocked: Boolean` 与 `onVolumeToggle: (Boolean) -> Unit`；紧跟在「锁定竖屏」开关行之后插入一行同样式 `Switch`，文案“锁定音量（禁止调节音量）”。
+
+4. **`MainActivity.kt`**：`collectAsState` 订阅 `repo.volumeLocked`（初值 `true`）；新增 `LaunchedEffect(volumeLocked)` 调用 `lock.setVolumeLocked(volumeLocked)`；`SettingsScreen` 调用处透传状态与回调，回调复用现有 `scope` 写回 DataStore。
+
+**验证：** `./gradlew :app:testDebugUnitTest` 与 `:app:assembleDebug` 均 BUILD SUCCESSFUL，无新增单测（`DevicePolicyManager` 用户限制依赖 Android 框架，`DISALLOW_ADJUST_VOLUME` 在 OriginOS 上的实际拦截效果需真机复测确认）。

@@ -37,6 +37,8 @@ fun SettingsScreen(
     onBack: () -> Unit,
     orientationLocked: Boolean,
     onOrientationToggle: (Boolean) -> Unit,
+    volumeLocked: Boolean,
+    onVolumeToggle: (Boolean) -> Unit,
 ) {
     var showPinChange by remember { mutableStateOf(false) }
     var showReleaseConfirm by remember { mutableStateOf(false) }
@@ -58,6 +60,10 @@ fun SettingsScreen(
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 8.dp)) {
             Text("锁定竖屏（关闭自动旋转）", modifier = Modifier.weight(1f))
             Switch(checked = orientationLocked, onCheckedChange = onOrientationToggle)
+        }
+        Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 8.dp)) {
+            Text("锁定音量（禁止调节音量）", modifier = Modifier.weight(1f))
+            Switch(checked = volumeLocked, onCheckedChange = onVolumeToggle)
         }
         Text("白名单（勾选后出现在孩子桌面）", modifier = Modifier.padding(vertical = 8.dp))
         LazyColumn {

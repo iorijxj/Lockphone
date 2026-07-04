@@ -62,10 +62,20 @@ class LockController(private val context: Context) {
         }
     }
 
+    fun setVolumeLocked(locked: Boolean) {
+        if (!isDeviceOwner) return
+        if (locked) {
+            dpm.addUserRestriction(admin, UserManager.DISALLOW_ADJUST_VOLUME)
+        } else {
+            dpm.clearUserRestriction(admin, UserManager.DISALLOW_ADJUST_VOLUME)
+        }
+    }
+
     fun releaseDeviceOwner() {
         if (!isDeviceOwner) return
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_SAFE_BOOT)
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_FACTORY_RESET)
+        dpm.clearUserRestriction(admin, UserManager.DISALLOW_ADJUST_VOLUME)
         setPersistentHome(false)
         @Suppress("DEPRECATION")
         dpm.clearDeviceOwnerApp(context.packageName)
