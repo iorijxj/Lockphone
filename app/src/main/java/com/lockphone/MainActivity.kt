@@ -30,7 +30,7 @@ class MainActivity : ComponentActivity() {
     private val appList by lazy { AppListProvider(applicationContext) }
     private val pinGate = PinGate(
         clock = { System.currentTimeMillis() },
-        onLockedUntilChanged = { ts -> lifecycleScope.launch { repo.setCooldownUntil(ts) } },
+        onLockedUntilChanged = { ts -> lifecycleScope.launch(kotlinx.coroutines.NonCancellable) { repo.setCooldownUntil(ts) } },
     )
 
     // 临时退出锁定期间置 true，防止 LaunchedEffect 在退出瞬间把锁又加回去；
@@ -40,7 +40,6 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        lifecycleScope.launch { pinGate.restore(repo.getCooldownUntil()) }
         setContent {
             var screen by remember { mutableStateOf(Screen.LOADING) }
             var showPinDialog by remember { mutableStateOf(false) }
@@ -52,6 +51,7 @@ class MainActivity : ComponentActivity() {
             BackHandler { /* 锁定桌面吞掉返回键 */ }
 
             LaunchedEffect(Unit) {
+                pinGate.restore(repo.getCooldownUntil())
                 screen = if (repo.isPinSet()) Screen.LAUNCHER else Screen.WIZARD
             }
 
