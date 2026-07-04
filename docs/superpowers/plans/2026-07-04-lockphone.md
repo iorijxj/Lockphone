@@ -1545,3 +1545,20 @@ Task 2 Step 4 若被 ROM 拦截且无法绕过：停止本计划，回到 brains
 3. **开机自启**（新增 `boot/BootReceiver.kt` + `AndroidManifest.xml`）：新增 `BroadcastReceiver` 监听 `BOOT_COMPLETED`，收到后用 `FLAG_ACTIVITY_NEW_TASK` 拉起 `MainActivity`。Manifest 新增 `RECEIVE_BOOT_COMPLETED` 权限与 `exported=true` 的 receiver 声明。**已知限制：** OriginOS（vivo）等厂商 ROM 默认限制后台应用接收 `BOOT_COMPLETED` 广播，通常需要用户在「设置 → 应用管理 → Lockphone → 自启动」手动授权该权限，此接收器才会实际触发；纯软件层面无法绕过这个厂商限制，真机复测需人工确认自启动权限已开启。
 
 **验证：** `./gradlew :app:testDebugUnitTest` 与 `:app:assembleDebug` 均 BUILD SUCCESSFUL。`onStop` 删除、`BootReceiver` 均依赖 Android 框架生命周期/广播机制，无本地单测覆盖；三项均需真机复测：白名单 APP 是否可正常打开使用、Home 键行为是否仍符合预期、音量锚点是否感知为 70%、开机自启在授权/未授权自启动权限两种情况下的实际表现。
+
+### Task 15: 限额兜底提示
+
+**背景：** v3 复测反馈——孩子点白名单 APP 图标，若 OriginOS 的应用时长限额已触发，系统会静默拦截该 APP 前台化（我们已确认无法从系统读到"限额已用尽"这个状态，没有官方 API 或可靠间接信号可查）。此时点击图标毫无反应，孩子会盯着一个"点了没反应"的死图标，不知道发生了什么。本任务加一个启发式兜底：点了图标之后，用"本 Activity 是否成功退到后台"这个可观察信号，反推"启动到底有没有生效"，没生效就弹一个解释性提示，而不是放任孩子对着死图标发呆。
+
+**启发式检测逻辑（`MainActivity.kt`）：**
+- `LauncherScreen` 的 `onLaunch(pkg)` 回调里：先 `appList.launch(pkg)` 照常发起启动，再把 `pkg` 记到类级别的 `pendingLaunch: MutableState<String?>` 上，然后用 `scope`（`rememberCoroutineScope`）起一个协程 `delay(1500)` 后检查——如果 `pendingLaunch.value` 还没被清空，说明这 1.5 秒内本 Activity 从未真正退到后台，即启动大概率没生效，于是清空 `pendingLaunch` 并把 `showLimitDialog` 置 `true`。
+- `pendingLaunch` 之所以放在 Activity 类级别而非 `remember` 里，是因为要让 `onPause()` 能直接清掉它：只要启动真的成功，系统会在 APP 切走时回调 `onPause()`，这里立刻 `pendingLaunch.value = null`，1.5 秒后的检查就会发现"已经清空了"从而什么都不做——这是判断"启动成功"的唯一信号来源。
+- `showLimitDialog` 为 `true` 时在 LAUNCHER 分支渲染一个 `AlertDialog`：标题「暂时打不开」，正文「该应用今日可能已达使用限额，请稍后再试或让家长检查。」，一个「知道了」按钮关闭。
+
+**已知的不精确性（需真机复测确认，不是理论上可消除的）：**
+- 这是纯粹的时间窗口启发式，不是真正读到了限额状态——1.5 秒只是一个经验阈值，换不同机型、不同 APP 冷启动耗时会有出入。
+- **假阳性风险：** 某些 APP（尤其大型 APP 冷启动、或设备负载高时）前台化耗时可能超过 1.5 秒，会被误判为"被限额拦截"而弹出兜底提示，实际上 APP 只是慢；需要真机用几个偏重的白名单 APP（如游戏、地图类）测试冷启动是否会误触发。
+- **假阴性风险：** 如果 OriginOS 的拦截机制并非"完全不启动"而是"启动后极快速地把本 Activity 重新拉回前台"（例如短暂展示一个系统提示层后又切回来），1.5 秒内可能被误判为"启动成功"从而不弹提示，孩子依然看不到解释。
+- 需要真机验证两个方向：(a) 正常未达限额的白名单 APP 点击后不应误弹提示；(b) 人为把某个白名单 APP 的系统时长限额跑满后点击，应该弹出提示。若 1500ms 阈值经验证过短/过长，后续可调整为常量并按真机实测结果微调。
+
+**验证：** `./gradlew :app:testDebugUnitTest` 与 `:app:assembleDebug` 均 BUILD SUCCESSFUL，无新增单测（纯 UI 时序启发式，依赖 Activity 生命周期回调与真实系统限额拦截行为，无法在 JVM 单测里模拟，只能真机复测）。

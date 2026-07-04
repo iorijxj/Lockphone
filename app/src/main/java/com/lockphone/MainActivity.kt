@@ -5,6 +5,9 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -21,6 +24,7 @@ import com.lockphone.ui.LauncherScreen
 import com.lockphone.ui.PinDialog
 import com.lockphone.ui.SettingsScreen
 import com.lockphone.ui.WizardScreen
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private enum class Screen { LOADING, WIZARD, LAUNCHER, SETTINGS }
@@ -39,11 +43,16 @@ class MainActivity : ComponentActivity() {
     private val lockPaused = mutableStateOf(false)
     private val resumeTick = mutableStateOf(0)
 
+    // 限额兜底提示（Task 15）：记录刚发起、尚未确认成功的白名单 APP 启动；
+    // 若 onPause 成功回调（真正退到后台）说明启动生效，清空该标记
+    private val pendingLaunch = mutableStateOf<String?>(null)
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             var screen by remember { mutableStateOf(Screen.LOADING) }
             var showPinDialog by remember { mutableStateOf(false) }
+            var showLimitDialog by remember { mutableStateOf(false) }
             val whitelist by repo.whitelist.collectAsState(initial = emptySet())
             val orientationLocked by repo.orientationLocked.collectAsState(initial = true)
             val volumeLocked by repo.volumeLocked.collectAsState(initial = true)
@@ -91,7 +100,17 @@ class MainActivity : ComponentActivity() {
                 Screen.LAUNCHER -> {
                     LauncherScreen(
                         apps = allApps.filter { it.packageName in whitelist },
-                        onLaunch = { appList.launch(it) },
+                        onLaunch = { pkg ->
+                            appList.launch(pkg)
+                            pendingLaunch.value = pkg
+                            scope.launch {
+                                delay(1500)
+                                if (pendingLaunch.value != null) {
+                                    pendingLaunch.value = null
+                                    showLimitDialog = true
+                                }
+                            }
+                        },
                         onParentClick = { showPinDialog = true },
                     )
                     if (showPinDialog) {
@@ -104,6 +123,14 @@ class MainActivity : ComponentActivity() {
                                 screen = Screen.SETTINGS
                             },
                             onDismiss = { showPinDialog = false },
+                        )
+                    }
+                    if (showLimitDialog) {
+                        AlertDialog(
+                            onDismissRequest = { showLimitDialog = false },
+                            title = { Text("暂时打不开") },
+                            text = { Text("该应用今日可能已达使用限额，请稍后再试或让家长检查。") },
+                            confirmButton = { TextButton(onClick = { showLimitDialog = false }) { Text("知道了") } },
                         )
                     }
                 }
@@ -144,5 +171,11 @@ class MainActivity : ComponentActivity() {
         // 临时退出后重新打开本 APP：复位暂停标记并触发 LaunchedEffect 重跑 → 自动恢复锁定（spec 5.3）
         lockPaused.value = false
         resumeTick.value++
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // 成功退到后台说明刚才的 launch(pkg) 生效了，清空限额兜底的待确认标记
+        pendingLaunch.value = null
     }
 }
