@@ -72,16 +72,23 @@ class VolumeGuardService : Service() {
 
     private fun applyPolicy() {
         val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        val cur = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
+        val target = (max * LOCK_FRACTION).roundToInt().coerceAtLeast(1)
         when {
-            !volumeLocked -> {}
+            !volumeLocked -> {
+                lock.setVolumeAdjustRestricted(false)
+            }
             isBluetoothA2dpConnected() -> {
-                val min = (max * LOCK_FRACTION).roundToInt().coerceAtLeast(1)
-                if (cur < min) audio.setStreamVolume(AudioManager.STREAM_MUSIC, min, 0)
+                // 蓝牙：允许 70-100% 调节，用 clamp 兜底下限
+                lock.setVolumeAdjustRestricted(false)
+                val cur = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
+                if (cur < target) audio.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
             }
             else -> {
-                val target = (max * LOCK_FRACTION).roundToInt().coerceAtLeast(1)
+                // 无蓝牙：先解除限制以便把媒体音量设到 70%，设好后系统级全禁（彻底屏蔽屏幕/音量键调节，无绕过窗口）
+                lock.setVolumeAdjustRestricted(false)
+                val cur = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
                 if (cur != target) audio.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+                lock.setVolumeAdjustRestricted(true)
             }
         }
     }

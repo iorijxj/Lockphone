@@ -1578,3 +1578,14 @@ Task 2 Step 4 若被 ROM 拦截且无法绕过：停止本计划，回到 brains
 **验证：** `./gradlew :app:testDebugUnitTest` 与 `:app:assembleDebug` 均 BUILD SUCCESSFUL，无新增单测（`DataStore` 读写已有 Task 5/12 的既有模式覆盖，纯 UI 列表渲染无框架无关的可单测逻辑）。
 
 ### Task 17: PIN 最大长度提升到 256 位
+
+### Task 18: 无蓝牙音量改系统级禁用（彻底屏蔽屏幕调音量绕过）
+
+**背景：** 此前无蓝牙全锁场景用的是纯媒体音量 clamp（超出范围就拉回目标值），本质是"事后纠正"——孩子在拖动屏幕音量面板滑块的那个窗口期内，音量条会短暂偏离锁定值，直到下一次 `ContentObserver` 回调才被拉回，等于给了一个可利用的绕过窗口。本任务把无蓝牙场景改为系统级限制 `UserManager.DISALLOW_ADJUST_VOLUME`（`LockController.setVolumeAdjustRestricted`，Task 12 引入、由 `isDeviceOwner` 兜底），该限制会直接禁用音量键和屏幕音量面板，没有可绕过的时间窗口。代价是它是全局限制，会连带锁住铃声/闹钟/通知音量，不只是媒体音量——这个副作用在本任务中是被接受的权衡。蓝牙场景保持不变，仍需允许 70-100% 的音量调节区间，因此继续用 clamp 兜底下限，不能加系统级限制（否则蓝牙下也调不了音量）。
+
+**改动（`VolumeGuardService.kt` `applyPolicy()`）：**
+- `!volumeLocked`（总开关关闭）：清除 `DISALLOW_ADJUST_VOLUME`，不做任何 clamp。
+- 蓝牙已连接：清除 `DISALLOW_ADJUST_VOLUME`（必须允许调节），媒体音量低于 70% 时拉到 70%，上限不管（允许到 100%）。
+- 无蓝牙：顺序是"先清除限制 → 把媒体音量设到 70% → 再加上限制"。顺序不能变：`setStreamVolume` 在 `DISALLOW_ADJUST_VOLUME` 生效期间会被系统拦截，所以必须先清后设再加，清除到重新加上限制之间只有几毫秒的窗口，肉眼和操作层面都来不及借此绕过。加上限制之后，屏幕音量面板和物理音量键对所有音频流全部失效。
+
+**验证：** `./gradlew :app:testDebugUnitTest`（全部通过）与 `./gradlew :app:assembleDebug`（BUILD SUCCESSFUL）；该文件此前无专属单测（依赖 `AudioManager`/`DevicePolicyManager` 真实系统行为，无法在 JVM 单测里模拟），真机验证项见任务报告 `task-18-report.md`。
