@@ -53,16 +53,19 @@ fun PinDialog(
                 }
                 busy = true
                 scope.launch {
-                    if (onVerify(pin)) {
-                        gate.recordSuccess()
-                        onSuccess()
-                    } else {
-                        gate.recordFailure()
-                        pin = ""
-                        error = if (gate.canAttempt()) "密码错误"
-                        else "错误次数过多，请 ${gate.remainingLockMs() / 1000} 秒后再试"
+                    try {
+                        if (onVerify(pin)) {
+                            gate.recordSuccess()
+                            onSuccess()
+                        } else {
+                            gate.recordFailure()
+                            pin = ""
+                            error = if (gate.canAttempt()) "密码错误"
+                            else "错误次数过多，请 ${gate.remainingLockMs() / 1000} 秒后再试"
+                        }
+                    } finally {
+                        busy = false
                     }
-                    busy = false
                 }
             }) { Text("确定") }
         },

@@ -22,6 +22,7 @@
 - 用户限制：`DISALLOW_SAFE_BOOT`、`DISALLOW_FACTORY_RESET`，彻底解除时必须成对清除
 - git 提交走 Bash 工具，conventional commits 中文描述
 - Windows 环境；gradle 命令在 Bash 工具中用 `./gradlew`，adb 全路径 `$LOCALAPPDATA/Android/Sdk/platform-tools/adb.exe`（下文简写 `adb`，执行时若 PATH 未配置则用全路径）
+- 本构建锁定单台 API 29 设备：targetSdk 34 但未声明 `<queries>` 包可见性；若换 API 30+ 设备部署，必须先补 `<queries>` 声明，否则应用列表为空
 
 ## File Structure
 
@@ -194,7 +195,8 @@ dependencies {
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
-            android:stateNotNeeded="true">
+            android:stateNotNeeded="true"
+            android:configChanges="orientation|screenSize|keyboardHidden">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -1005,16 +1007,19 @@ fun PinDialog(
                 }
                 busy = true
                 scope.launch {
-                    if (onVerify(pin)) {
-                        gate.recordSuccess()
-                        onSuccess()
-                    } else {
-                        gate.recordFailure()
-                        pin = ""
-                        error = if (gate.canAttempt()) "密码错误"
-                        else "错误次数过多，请 ${gate.remainingLockMs() / 1000} 秒后再试"
+                    try {
+                        if (onVerify(pin)) {
+                            gate.recordSuccess()
+                            onSuccess()
+                        } else {
+                            gate.recordFailure()
+                            pin = ""
+                            error = if (gate.canAttempt()) "密码错误"
+                            else "错误次数过多，请 ${gate.remainingLockMs() / 1000} 秒后再试"
+                        }
+                    } finally {
+                        busy = false
                     }
-                    busy = false
                 }
             }) { Text("确定") }
         },
@@ -1413,7 +1418,7 @@ git add -A && git commit -m "feat: 家长设置页、首次向导与主状态机
 
 1. 白名单 APP 从桌面点开正常使用，退出后回锁定桌面
 2. 白名单外 APP 不出现在桌面，且无法通过任何入口启动
-3. 家长模式按钮 → 正确 PIN 进入设置页；错误 PIN 5 次后冷却 60 秒
+3. 家长模式按钮 → 正确 PIN 进入设置页；错误 PIN 5 次后冷却 60 秒（冷却期间旋转屏幕/锁屏再解锁，冷却仍须生效）
 4. 设置页勾选/取消 APP，返回桌面即时生效
 5. 修改 PIN 后旧 PIN 失效、新 PIN 可用
 6. 临时退出锁定 → 到系统桌面；重新打开 Lockphone → 自动恢复锁定
