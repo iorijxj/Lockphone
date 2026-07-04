@@ -43,4 +43,30 @@ class PinGateTest {
         gate.recordFailure()
         assertFalse(gate.canAttempt())
     }
+
+    @Test
+    fun `initialLockedUntil 生效`() {
+        val restoredGate = PinGate(clock = { now }, initialLockedUntil = 60_000L)
+        now = 0
+        assertFalse(restoredGate.canAttempt())
+        now = 60_000
+        assertTrue(restoredGate.canAttempt())
+    }
+
+    @Test
+    fun `锁定触发时回调收到 lockedUntil`() {
+        var lastValue = -1L
+        val callbackGate = PinGate(clock = { now }, onLockedUntilChanged = { lastValue = it })
+        repeat(5) { callbackGate.recordFailure() }
+        assertEquals(60_000L, lastValue)
+    }
+
+    @Test
+    fun `recordSuccess 回调收到 0`() {
+        var lastValue = -1L
+        val callbackGate = PinGate(clock = { now }, onLockedUntilChanged = { lastValue = it })
+        repeat(5) { callbackGate.recordFailure() }
+        callbackGate.recordSuccess()
+        assertEquals(0L, lastValue)
+    }
 }

@@ -1456,3 +1456,21 @@ git add -A && git commit -m "docs: 整机验收结果"
 ## 降级路径（决策门失败时）
 
 Task 2 Step 4 若被 ROM 拦截且无法绕过：停止本计划，回到 brainstorming 重新设计软锁方案（普通 Launcher + `startLockTask` 屏幕固定模式 + 无障碍服务拦截设置页）。软锁方案另出 spec 与 plan，不在本文档范围。
+
+---
+
+### Task 10: 真机加固第一轮
+
+**背景：** vivo NEX S（Android 10 / OriginOS 1.0）真机验收暴露出若干 ROM 兼容性问题，本任务针对性修复，不改变整体架构。
+
+**改动清单：**
+
+1. **应用改名**（`AndroidManifest.xml`）：`android:label` 由 `Lockphone` 改为 `管住逆子的手`，仅影响桌面显示名，不动 `applicationId` / `rootProject.name`。
+
+2. **临时退出修复**（`LockController.kt` `temporaryExit`）：原实现用裸 `ACTION_MAIN` + `CATEGORY_HOME` 广播意图，OriginOS 上会把自己（本 APP 已注册 HOME）也解析进候选，导致退出常失败/原地打转。改为 `queryIntentActivities` 显式过滤掉自身包名，取系统真正的桌面 Launcher 组件后用显式 `Intent` 启动。
+
+3. **PIN 冷却持久化**（`PinGate.kt` + `SettingsRepository.kt` + `MainActivity.kt`）：原冷却状态只存在内存变量，OriginOS 后台回收/旋转屏幕重建 Activity 后 `lockedUntil` 归零，孩子可借旋转屏幕绕过冷却。`PinGate` 新增 `initialLockedUntil` 构造参数、`restore()` 方法与 `onLockedUntilChanged` 回调；`SettingsRepository` 新增 `COOLDOWN_UNTIL`（`longPreferencesKey`）及 `getCooldownUntil` / `setCooldownUntil`；`MainActivity` 在 `onCreate` 中用 `lifecycleScope` 恢复冷却时间，并在冷却状态变化时写回 DataStore，跨进程重建后冷却仍然生效。
+
+4. **Kiosk 兜底**（`AndroidManifest.xml` 权限 + `MainActivity.onStop`）：OriginOS 的全面屏手势/多任务卡片可绕过 Lock Task 直接把本 APP 切到后台。新增 `REORDER_TASKS` 权限，`MainActivity` 重写 `onStop`，只要不是主动临时退出（`lockPaused`）或正在结束（`isFinishing`），立即 `moveTaskToFront` 把任务拉回前台，作为系统级锁定之外的应用层兜底。
+
+**验证：** `PinGateTest.kt` 新增 3 个用例覆盖 `initialLockedUntil`、锁定触发回调、`recordSuccess` 回调归零；`./gradlew :app:testDebugUnitTest` 与 `:app:assembleDebug` 均 BUILD SUCCESSFUL。`LockController`/`MainActivity` 的改动依赖 Android 框架类（`PackageManager`、`ActivityManager`、`lifecycleScope`），无本地单测覆盖，需真机复测确认（第二轮真机验收）。

@@ -7,6 +7,7 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.os.UserManager
 import com.lockphone.MainActivity
 
@@ -46,11 +47,19 @@ class LockController(private val context: Context) {
             activity.stopLockTask()
         }
         if (isDeviceOwner) setPersistentHome(false)
-        activity.startActivity(
-            Intent(Intent.ACTION_MAIN)
-                .addCategory(Intent.CATEGORY_HOME)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-        )
+        val homeIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME)
+        val other = context.packageManager
+            .queryIntentActivities(homeIntent, PackageManager.MATCH_DEFAULT_ONLY)
+            .firstOrNull { it.activityInfo.packageName != context.packageName }
+        if (other != null) {
+            activity.startActivity(
+                Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_HOME)
+                    setClassName(other.activityInfo.packageName, other.activityInfo.name)
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                },
+            )
+        }
     }
 
     fun releaseDeviceOwner() {

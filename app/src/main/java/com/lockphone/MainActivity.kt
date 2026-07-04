@@ -11,6 +11,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.lifecycle.lifecycleScope
 import com.lockphone.admin.LockController
 import com.lockphone.apps.AppListProvider
 import com.lockphone.data.SettingsRepository
@@ -27,7 +28,10 @@ class MainActivity : ComponentActivity() {
     private val repo by lazy { SettingsRepository(applicationContext) }
     private val lock by lazy { LockController(applicationContext) }
     private val appList by lazy { AppListProvider(applicationContext) }
-    private val pinGate = PinGate(clock = { System.currentTimeMillis() })
+    private val pinGate = PinGate(
+        clock = { System.currentTimeMillis() },
+        onLockedUntilChanged = { ts -> lifecycleScope.launch { repo.setCooldownUntil(ts) } },
+    )
 
     // 临时退出锁定期间置 true，防止 LaunchedEffect 在退出瞬间把锁又加回去；
     // 重新打开 APP 时 onResume 复位并递增 resumeTick，触发自动恢复锁定（spec 5.3）
@@ -36,6 +40,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        lifecycleScope.launch { pinGate.restore(repo.getCooldownUntil()) }
         setContent {
             var screen by remember { mutableStateOf(Screen.LOADING) }
             var showPinDialog by remember { mutableStateOf(false) }
@@ -120,5 +125,13 @@ class MainActivity : ComponentActivity() {
         // 临时退出后重新打开本 APP：复位暂停标记并触发 LaunchedEffect 重跑 → 自动恢复锁定（spec 5.3）
         lockPaused.value = false
         resumeTick.value++
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (!lockPaused.value && !isFinishing) {
+            val am = getSystemService(ACTIVITY_SERVICE) as android.app.ActivityManager
+            am.moveTaskToFront(taskId, 0)
+        }
     }
 }
