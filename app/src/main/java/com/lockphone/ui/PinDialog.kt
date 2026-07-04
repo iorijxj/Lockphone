@@ -26,6 +26,7 @@ fun PinDialog(
 ) {
     var pin by remember { mutableStateOf("") }
     var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
     val scope = rememberCoroutineScope()
 
     AlertDialog(
@@ -45,10 +46,12 @@ fun PinDialog(
         },
         confirmButton = {
             TextButton(onClick = {
+                if (busy) return@TextButton
                 if (!gate.canAttempt()) {
                     error = "错误次数过多，请 ${gate.remainingLockMs() / 1000} 秒后再试"
                     return@TextButton
                 }
+                busy = true
                 scope.launch {
                     if (onVerify(pin)) {
                         gate.recordSuccess()
@@ -57,8 +60,9 @@ fun PinDialog(
                         gate.recordFailure()
                         pin = ""
                         error = if (gate.canAttempt()) "密码错误"
-                        else "错误次数过多，请 60 秒后再试"
+                        else "错误次数过多，请 ${gate.remainingLockMs() / 1000} 秒后再试"
                     }
+                    busy = false
                 }
             }) { Text("确定") }
         },
