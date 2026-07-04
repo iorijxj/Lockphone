@@ -1507,23 +1507,27 @@ Task 2 Step 4 若被 ROM 拦截且无法绕过：停止本计划，回到 brains
 
 ### Task 13: 蓝牙感知媒体音量控制
 
-**背景：** Task 12 的「锁定音量」开关是非黑即白的全锁（`DISALLOW_ADJUST_VOLUME`）。但家长实际诉求更细：接了蓝牙音箱/耳机听歌时不该完全锁死音量（外放设备音量本就该能调），而是把媒体音量夹在 [50%, 100%] 之间，防止孩子调到很小听不清或静音；没接蓝牙时维持 Task 12 的全锁行为。本任务把开关语义从「是否全锁音量」升级为「音量策略总开关」，具体策略由是否检测到蓝牙 A2DP 输出设备决定。
+**背景：** Task 12 的「锁定音量」开关是非黑即白的全锁（`DISALLOW_ADJUST_VOLUME`）。但家长实际诉求更细：接了蓝牙音箱/耳机听歌时不该完全锁死音量（外放设备音量本就该能调），而是把媒体音量夹在 [50%, 100%] 之间，防止孩子调到很小听不清或静音；没接蓝牙时冻结媒体音量在当前值。本任务把开关语义从「是否全锁音量」升级为「音量策略总开关」，具体策略由是否检测到蓝牙 A2DP 输出设备决定，且**只控制 `STREAM_MUSIC`（媒体音量），不触碰铃声/闹钟/通知音量**。
 
-**策略（仅作用于 STREAM_MUSIC / 媒体音量）：**
-- 开关 OFF → 完全不限制音量（清除 `DISALLOW_ADJUST_VOLUME`，不做任何夹取）
-- 开关 ON + 已连接蓝牙 A2DP 输出 → 清除 `DISALLOW_ADJUST_VOLUME`（允许调节），但媒体音量一旦低于系统最大音量的 50% 就立即拉回 50%（上限即系统最大值，无需处理）
-- 开关 ON + 未连接蓝牙 A2DP → 施加 `DISALLOW_ADJUST_VOLUME`（等同 Task 12 全锁）
+**策略（仅作用于 STREAM_MUSIC / 媒体音量，纯 clamp，不使用 `DISALLOW_ADJUST_VOLUME`）：**
+- 开关 OFF → 完全不干预媒体音量
+- 开关 ON + 已连接蓝牙 A2DP 输出 → 媒体音量一旦低于系统最大音量的 50% 就立即拉回 50%（上限即系统最大值，无需处理）
+- 开关 ON + 未连接蓝牙 A2DP → 冻结媒体音量在进入该状态时的当前值：孩子按音量键调低/调高后，`ContentObserver` 立即把它拉回冻结值，形成"按了但弹回"的观感
+
+**为什么放弃 `DISALLOW_ADJUST_VOLUME`（Code Review 修正）：** 该 User Restriction 是全局的，一旦施加会连带锁死铃声、闹钟、通知音量，与"只控媒体音量"的 spec 矛盾（Important 级别 review 发现）。改为在 Service 内部维护 `lockedMediaVolume: Int?` 状态，靠 `ContentObserver` 检测到音量变化后用 `setStreamVolume` 把 `STREAM_MUSIC` 拉回目标值实现"冻结"，不再调用限制类 API，也就完全不影响其他音频流。
 
 **为什么要用前台 Service：** 该策略需要在孩子处于白名单 APP（本 Activity 退到后台）时持续生效——音量条随时可能被调、蓝牙耳机随时可能被摘下，靠 Activity 生命周期挂钩的 `LaunchedEffect` 覆盖不到后台场景。因此把策略执行下沉到独立前台 Service，用 `ContentObserver` 监听系统音量变化、用 `AudioManager.registerAudioDeviceCallback` 监听蓝牙 A2DP 设备插拔，任一事件触发即重新评估并应用策略。蓝牙检测走 `AudioManager.getDevices(GET_DEVICES_OUTPUTS)` 判断 `AudioDeviceInfo.TYPE_BLUETOOTH_A2DP`，不声明蓝牙权限。
 
 **改动清单：**
 
-1. **`LockController.kt`**：`setVolumeLocked(locked: Boolean)` 更名为 `setVolumeAdjustRestricted(restricted: Boolean)`，方法体不变（仍是 Device Owner 下 add/clear `DISALLOW_ADJUST_VOLUME`），定位从「策略入口」降级为「Service 调用的底层原语」。`releaseDeviceOwner()` 中对该限制的清除保持不变。
+1. **`LockController.kt`**：`setVolumeLocked(locked: Boolean)` 更名为 `setVolumeAdjustRestricted(restricted: Boolean)`，方法体不变（仍是 Device Owner 下 add/clear `DISALLOW_ADJUST_VOLUME`）。迁移到纯 clamp 方案后该方法不再是常规策略路径，仅保留给 Service `onCreate` 调用一次 `setVolumeAdjustRestricted(false)` 用于清除 Task 12 遗留的全局限制（历史升级用户的兼容处理）；`releaseDeviceOwner()` 中对该限制的清除也保持不变（同样是清理历史状态，无害）。
 
-2. **新增 `audio/VolumeGuardService.kt`**：前台 Service，`onCreate` 中启动前台通知（`IMPORTANCE_MIN` 静默渠道）、注册 `ContentObserver`（监听 `Settings.System.CONTENT_URI`）与 `AudioDeviceCallback`，并订阅 `repo.volumeLocked` Flow；任一变化都调用 `applyPolicy()` 按上述三态逻辑调用 `lock.setVolumeAdjustRestricted` 与 `clampMediaVolume()`（夹取阈值用 `STREAM_MUSIC` 的 `getStreamMaxVolume * 0.5` 四舍五入，至少为 1）。`onStartCommand` 返回 `START_STICKY`，`onDestroy` 里注销 Observer/Callback 并取消协程作用域。
+2. **新增 `audio/VolumeGuardService.kt`**：前台 Service，持有 `lockedMediaVolume: Int?` 记录无蓝牙状态下的冻结音量。`onCreate` 中启动前台通知（`IMPORTANCE_MIN` 静默渠道），先调用一次 `lock.setVolumeAdjustRestricted(false)` 清理遗留限制；随后在协程里**先 `repo.volumeLocked.first()` 拿到真实初始值赋给 `volumeLocked`，再注册 `ContentObserver` / `AudioDeviceCallback`，再 `applyPolicy()` 应用一次，最后订阅 `repo.volumeLocked.drop(1)` 的后续变化**——这个顺序是为了修另一处 Code Review 发现的竞态：若先注册回调、Flow 默认值 `true` 还没被真实值覆盖时设备回调抢先触发，会在开关实际是 OFF 的情况下误触发一次 clamp。`applyPolicy()` 改为三态 clamp 逻辑：开关 OFF 清空 `lockedMediaVolume`、不做任何操作；开关 ON + 蓝牙 A2DP 已连接则清空 `lockedMediaVolume` 并在 `cur < min` 时 `setStreamVolume` 拉回 `min = round(max * 0.5).coerceAtLeast(1)`；开关 ON + 无蓝牙则取 `lockedMediaVolume ?: cur`（首次进入该分支记录当前值为冻结目标），若 `cur != target` 就拉回 target。`onStartCommand` 返回 `START_STICKY`；新增 `registered: Boolean` 标记，`onDestroy` 仅在 `registered` 为真时才注销 Observer/Callback（因为注册被推迟到协程内部，避免协程还没跑到注册那一步就 `onDestroy` 导致注销未注册对象抛异常）。
 
 3. **`AndroidManifest.xml`**：新增 `FOREGROUND_SERVICE` / `FOREGROUND_SERVICE_SPECIAL_USE` 权限；注册 `VolumeGuardService`（`exported=false`，`foregroundServiceType="specialUse"`，子类型 `parental_media_volume_control`）。
 
-4. **`MainActivity.kt`**：移除 Task 12 遗留的 `LaunchedEffect(volumeLocked) { lock.setVolumeLocked(volumeLocked) }` 直接调用——音量策略的施加权完全交给 Service；新增 `LaunchedEffect(Unit) { startForegroundService(...) }` 在进入锁定桌面时启动 `VolumeGuardService`。`volumeLocked` 仍从 `repo.volumeLocked` 订阅并透传给 `SettingsScreen` 驱动开关 UI 与写回 DataStore，Service 侧监听同一个 Flow 各自应用策略，两边通过 DataStore 解耦。
+4. **`MainActivity.kt`**：移除 Task 12 遗留的 `LaunchedEffect(volumeLocked) { lock.setVolumeLocked(volumeLocked) }` 直接调用——音量策略的施加权完全交给 Service。启动 `VolumeGuardService` 的 `LaunchedEffect` 从 `LaunchedEffect(Unit)`（WIZARD 阶段就会跑）改为 `LaunchedEffect(screen) { if (screen == Screen.LAUNCHER) startForegroundService(...) }`，只在进入锁定桌面时才拉起 Service，避免设置向导阶段就常驻通知。`volumeLocked` 仍从 `repo.volumeLocked` 订阅并透传给 `SettingsScreen` 驱动开关 UI 与写回 DataStore，Service 侧监听同一个 Flow 各自应用策略，两边通过 DataStore 解耦。
 
-**验证：** `./gradlew :app:testDebugUnitTest` 与 `:app:assembleDebug` 均 BUILD SUCCESSFUL，无新增单测（`AudioManager`/`AudioDeviceCallback`/前台 Service 生命周期依赖 Android 框架，蓝牙 A2DP 插拔检测、音量夹取跳变体验、Service 在 OriginOS 后台存活情况均需真机复测确认）。
+5. **`SettingsRepository.kt`**：`volumeLocked` Flow 追加 `.distinctUntilChanged()`，避免 DataStore 里其他键（如白名单）的无关写入触发一次多余的 `applyPolicy()`。
+
+**验证：** `./gradlew :app:testDebugUnitTest` 与 `:app:assembleDebug` 均 BUILD SUCCESSFUL，无新增单测（`AudioManager`/`AudioDeviceCallback`/前台 Service 生命周期依赖 Android 框架，蓝牙 A2DP 插拔检测、无蓝牙下"冻结音量回弹"手感、Service 在 OriginOS 后台存活情况均需真机复测确认）。

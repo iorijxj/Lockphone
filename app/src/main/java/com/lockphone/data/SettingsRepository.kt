@@ -9,6 +9,7 @@ import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.lockphone.security.PinHasher
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 
@@ -42,7 +43,7 @@ class SettingsRepository(private val context: Context) {
     }
 
     val volumeLocked: Flow<Boolean> =
-        context.dataStore.data.map { it[Keys.VOLUME_LOCKED] ?: true }
+        context.dataStore.data.map { it[Keys.VOLUME_LOCKED] ?: true }.distinctUntilChanged()
 
     suspend fun setVolumeLocked(locked: Boolean) {
         context.dataStore.edit { it[Keys.VOLUME_LOCKED] = locked }

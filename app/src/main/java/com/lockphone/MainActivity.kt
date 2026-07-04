@@ -70,8 +70,10 @@ class MainActivity : ComponentActivity() {
                     else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             }
 
-            LaunchedEffect(Unit) {
-                startForegroundService(Intent(this@MainActivity, com.lockphone.audio.VolumeGuardService::class.java))
+            LaunchedEffect(screen) {
+                if (screen == Screen.LAUNCHER) {
+                    startForegroundService(Intent(this@MainActivity, com.lockphone.audio.VolumeGuardService::class.java))
+                }
             }
 
             when (screen) {

@@ -20,6 +20,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlin.math.roundToInt
 
@@ -30,6 +32,8 @@ class VolumeGuardService : Service() {
     private lateinit var lock: LockController
     private lateinit var repo: SettingsRepository
     private var volumeLocked = true
+    private var lockedMediaVolume: Int? = null
+    private var registered = false
 
     private val handler = Handler(Looper.getMainLooper())
 
@@ -48,10 +52,14 @@ class VolumeGuardService : Service() {
         lock = LockController(applicationContext)
         repo = SettingsRepository(applicationContext)
         startForeground(NOTIF_ID, buildNotification())
-        contentResolver.registerContentObserver(Settings.System.CONTENT_URI, true, volumeObserver)
-        audio.registerAudioDeviceCallback(deviceCallback, handler)
+        lock.setVolumeAdjustRestricted(false) // 清除 Task 12 遗留的全局音量限制（迁移到纯 clamp 方案）
         scope.launch {
-            repo.volumeLocked.collect {
+            volumeLocked = repo.volumeLocked.first()
+            contentResolver.registerContentObserver(Settings.System.CONTENT_URI, true, volumeObserver)
+            audio.registerAudioDeviceCallback(deviceCallback, handler)
+            registered = true
+            applyPolicy()
+            repo.volumeLocked.drop(1).collect {
                 volumeLocked = it
                 applyPolicy()
             }
@@ -64,22 +72,21 @@ class VolumeGuardService : Service() {
         }
 
     private fun applyPolicy() {
-        when {
-            !volumeLocked -> lock.setVolumeAdjustRestricted(false)
-            isBluetoothA2dpConnected() -> {
-                lock.setVolumeAdjustRestricted(false)
-                clampMediaVolume()
-            }
-            else -> lock.setVolumeAdjustRestricted(true)
-        }
-    }
-
-    private fun clampMediaVolume() {
         val max = audio.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        val min = (max * MIN_FRACTION).roundToInt().coerceAtLeast(1)
         val cur = audio.getStreamVolume(AudioManager.STREAM_MUSIC)
-        if (cur < min) {
-            audio.setStreamVolume(AudioManager.STREAM_MUSIC, min, 0)
+        when {
+            !volumeLocked -> {
+                lockedMediaVolume = null
+            }
+            isBluetoothA2dpConnected() -> {
+                lockedMediaVolume = null
+                val min = (max * MIN_FRACTION).roundToInt().coerceAtLeast(1)
+                if (cur < min) audio.setStreamVolume(AudioManager.STREAM_MUSIC, min, 0)
+            }
+            else -> {
+                val target = lockedMediaVolume ?: cur.also { lockedMediaVolume = it }
+                if (cur != target) audio.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+            }
         }
     }
 
@@ -99,8 +106,10 @@ class VolumeGuardService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
 
     override fun onDestroy() {
-        contentResolver.unregisterContentObserver(volumeObserver)
-        audio.unregisterAudioDeviceCallback(deviceCallback)
+        if (registered) {
+            contentResolver.unregisterContentObserver(volumeObserver)
+            audio.unregisterAudioDeviceCallback(deviceCallback)
+        }
         scope.cancel()
         super.onDestroy()
     }
