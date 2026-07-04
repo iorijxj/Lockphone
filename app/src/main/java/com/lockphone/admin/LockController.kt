@@ -62,9 +62,9 @@ class LockController(private val context: Context) {
         }
     }
 
-    fun setVolumeLocked(locked: Boolean) {
+    fun setVolumeAdjustRestricted(restricted: Boolean) {
         if (!isDeviceOwner) return
-        if (locked) {
+        if (restricted) {
             dpm.addUserRestriction(admin, UserManager.DISALLOW_ADJUST_VOLUME)
         } else {
             dpm.clearUserRestriction(admin, UserManager.DISALLOW_ADJUST_VOLUME)

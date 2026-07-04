@@ -1,5 +1,6 @@
 package com.lockphone
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
@@ -69,7 +70,9 @@ class MainActivity : ComponentActivity() {
                     else android.content.pm.ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
             }
 
-            LaunchedEffect(volumeLocked) { lock.setVolumeLocked(volumeLocked) }
+            LaunchedEffect(Unit) {
+                startForegroundService(Intent(this@MainActivity, com.lockphone.audio.VolumeGuardService::class.java))
+            }
 
             when (screen) {
                 Screen.LOADING -> {}
