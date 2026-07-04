@@ -56,6 +56,7 @@ class MainActivity : ComponentActivity() {
             val whitelist by repo.whitelist.collectAsState(initial = emptySet())
             val orientationLocked by repo.orientationLocked.collectAsState(initial = true)
             val volumeLocked by repo.volumeLocked.collectAsState(initial = true)
+            val pinFailures by repo.pinFailures.collectAsState(initial = emptyList())
             val scope = rememberCoroutineScope()
             val allApps = remember { appList.launchableApps() }
 
@@ -114,7 +115,11 @@ class MainActivity : ComponentActivity() {
                         PinDialog(
                             title = "家长模式验证",
                             gate = pinGate,
-                            onVerify = { repo.verifyPin(it) },
+                            onVerify = { entered ->
+                                val ok = repo.verifyPin(entered)
+                                if (!ok) repo.recordPinFailure(System.currentTimeMillis())
+                                ok
+                            },
                             onSuccess = {
                                 showPinDialog = false
                                 screen = Screen.SETTINGS
@@ -158,6 +163,7 @@ class MainActivity : ComponentActivity() {
                     onOrientationToggle = { scope.launch { repo.setOrientationLocked(it) } },
                     volumeLocked = volumeLocked,
                     onVolumeToggle = { scope.launch { repo.setVolumeLocked(it) } },
+                    pinFailures = pinFailures,
                 )
             }
         }

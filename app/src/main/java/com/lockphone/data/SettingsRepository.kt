@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.map
 
 private val Context.dataStore by preferencesDataStore(name = "lockphone_settings")
 
+private const val MAX_PIN_FAILURES = 100
+
 fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 fun String.hexToBytes(): ByteArray = chunked(2).map { it.toInt(16).toByte() }.toByteArray()
 
@@ -26,6 +28,7 @@ class SettingsRepository(private val context: Context) {
         val COOLDOWN_UNTIL = longPreferencesKey("cooldown_until")
         val ORIENTATION_LOCKED = booleanPreferencesKey("orientation_locked")
         val VOLUME_LOCKED = booleanPreferencesKey("volume_locked")
+        val PIN_FAILURES = stringPreferencesKey("pin_failures")
     }
 
     val whitelist: Flow<Set<String>> =
@@ -72,5 +75,25 @@ class SettingsRepository(private val context: Context) {
 
     suspend fun setCooldownUntil(timestamp: Long) {
         context.dataStore.edit { it[Keys.COOLDOWN_UNTIL] = timestamp }
+    }
+
+    val pinFailures: Flow<List<Long>> =
+        context.dataStore.data.map { prefs ->
+            prefs[Keys.PIN_FAILURES]
+                ?.split("\n")
+                ?.filter { it.isNotBlank() }
+                ?.mapNotNull { it.toLongOrNull() }
+                ?: emptyList()
+        }
+
+    suspend fun recordPinFailure(timestamp: Long) {
+        context.dataStore.edit { prefs ->
+            val existing = prefs[Keys.PIN_FAILURES]
+                ?.split("\n")
+                ?.filter { it.isNotBlank() }
+                ?: emptyList()
+            val updated = (existing + timestamp.toString()).takeLast(MAX_PIN_FAILURES)
+            prefs[Keys.PIN_FAILURES] = updated.joinToString("\n")
+        }
     }
 }

@@ -4,6 +4,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -39,9 +40,11 @@ fun SettingsScreen(
     onOrientationToggle: (Boolean) -> Unit,
     volumeLocked: Boolean,
     onVolumeToggle: (Boolean) -> Unit,
+    pinFailures: List<Long>,
 ) {
     var showPinChange by remember { mutableStateOf(false) }
     var showReleaseConfirm by remember { mutableStateOf(false) }
+    var showFailuresDialog by remember { mutableStateOf(false) }
 
     Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -55,7 +58,10 @@ fun SettingsScreen(
             Button(onClick = onTemporaryExit, modifier = Modifier.padding(end = 8.dp)) {
                 Text("临时退出锁定")
             }
-            Button(onClick = { showReleaseConfirm = true }) { Text("彻底解除") }
+            Button(onClick = { showReleaseConfirm = true }, modifier = Modifier.padding(end = 8.dp)) {
+                Text("彻底解除")
+            }
+            Button(onClick = { showFailuresDialog = true }) { Text("密码错误记录") }
         }
         Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 8.dp)) {
             Text("锁定竖屏（关闭自动旋转）", modifier = Modifier.weight(1f))
@@ -119,6 +125,28 @@ fun SettingsScreen(
             text = { Text("手机将完全恢复正常，本 APP 变为普通应用可卸载。数据不受影响。") },
             confirmButton = { TextButton(onClick = onRelease) { Text("确认解除") } },
             dismissButton = { TextButton({ showReleaseConfirm = false }) { Text("取消") } },
+        )
+    }
+
+    if (showFailuresDialog) {
+        val fmt = remember { java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.getDefault()) }
+        AlertDialog(
+            onDismissRequest = { showFailuresDialog = false },
+            title = { Text("密码错误记录（共 ${pinFailures.size} 次）") },
+            text = {
+                if (pinFailures.isEmpty()) {
+                    Text("暂无记录")
+                } else {
+                    LazyColumn(
+                        modifier = Modifier.heightIn(max = 360.dp),
+                    ) {
+                        items(pinFailures.reversed()) { ts ->
+                            Text(fmt.format(java.util.Date(ts)), modifier = Modifier.padding(vertical = 4.dp))
+                        }
+                    }
+                }
+            },
+            confirmButton = { TextButton(onClick = { showFailuresDialog = false }) { Text("关闭") } },
         )
     }
 }

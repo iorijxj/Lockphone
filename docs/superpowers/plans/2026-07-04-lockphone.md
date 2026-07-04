@@ -1562,3 +1562,17 @@ Task 2 Step 4 若被 ROM 拦截且无法绕过：停止本计划，回到 brains
 - 需要真机验证两个方向：(a) 正常未达限额的白名单 APP 点击后不应误弹提示；(b) 人为把某个白名单 APP 的系统时长限额跑满后点击，应该弹出提示。若 1500ms 阈值经验证过短/过长，后续可调整为常量并按真机实测结果微调。
 
 **验证：** `./gradlew :app:testDebugUnitTest` 与 `:app:assembleDebug` 均 BUILD SUCCESSFUL，无新增单测（纯 UI 时序启发式，依赖 Activity 生命周期回调与真实系统限额拦截行为，无法在 JVM 单测里模拟，只能真机复测）。
+
+### Task 16: PIN 错误记录统计
+
+**背景：** 家长想知道孩子有没有在偷偷试密码、试了多少次。本任务记录每次家长模式验证 PIN 失败的时间戳，并在设置页提供一个入口查看完整列表和总次数。只记录家长模式验证入口（`LauncherScreen` 点「家长模式」弹出的 `PinDialog`）的失败，不记录设置页内「修改 PIN」流程——后者不是一次未授权访问尝试。
+
+**改动清单：**
+
+1. **`SettingsRepository.kt`**：新增 `stringPreferencesKey("pin_failures")`（`Keys.PIN_FAILURES`），值为换行分隔的 epoch 毫秒时间戳字符串，FIFO 上限 `MAX_PIN_FAILURES = 100`（超过丢最旧的）。暴露 `val pinFailures: Flow<List<Long>>`（按写入顺序，最新的在最后）与 `suspend fun recordPinFailure(timestamp: Long)`。
+
+2. **`MainActivity.kt`**：家长模式验证 `PinDialog` 的 `onVerify` 从 `{ repo.verifyPin(it) }` 改为先校验、失败时调用 `repo.recordPinFailure(System.currentTimeMillis())` 再返回结果；`collectAsState` 新增订阅 `repo.pinFailures`（初值 `emptyList()`），透传给 `SettingsScreen` 新增的 `pinFailures` 入参。
+
+3. **`SettingsScreen.kt`**：新增入参 `pinFailures: List<Long>`；操作按钮行新增「密码错误记录」按钮，点击弹出 `AlertDialog`：标题带总次数「密码错误记录（共 N 次）」，正文用 `LazyColumn`（`heightIn(max = 360.dp)`）倒序（最新在前）列出 `yyyy-MM-dd HH:mm:ss` 格式的时间戳，空列表时显示「暂无记录」。
+
+**验证：** `./gradlew :app:testDebugUnitTest` 与 `:app:assembleDebug` 均 BUILD SUCCESSFUL，无新增单测（`DataStore` 读写已有 Task 5/12 的既有模式覆盖，纯 UI 列表渲染无框架无关的可单测逻辑）。
