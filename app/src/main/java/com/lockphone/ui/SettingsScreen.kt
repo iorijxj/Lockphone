@@ -1,6 +1,9 @@
 package com.lockphone.ui
 
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -27,6 +30,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lockphone.apps.AppEntry
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun SettingsScreen(
     allApps: List<AppEntry>,
@@ -51,14 +55,17 @@ fun SettingsScreen(
             Text("家长设置", fontSize = 20.sp, modifier = Modifier.padding(end = 16.dp))
             TextButton(onClick = onBack) { Text("返回桌面") }
         }
-        Row {
-            Button(onClick = { showPinChange = true }, modifier = Modifier.padding(end = 8.dp)) {
+        FlowRow(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Button(onClick = { showPinChange = true }) {
                 Text("修改 PIN")
             }
-            Button(onClick = onTemporaryExit, modifier = Modifier.padding(end = 8.dp)) {
+            Button(onClick = onTemporaryExit) {
                 Text("临时退出锁定")
             }
-            Button(onClick = { showReleaseConfirm = true }, modifier = Modifier.padding(end = 8.dp)) {
+            Button(onClick = { showReleaseConfirm = true }) {
                 Text("彻底解除")
             }
             Button(onClick = { showFailuresDialog = true }) { Text("密码错误记录") }
