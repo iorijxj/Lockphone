@@ -5,9 +5,6 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -24,7 +21,6 @@ import com.lockphone.ui.LauncherScreen
 import com.lockphone.ui.PinDialog
 import com.lockphone.ui.SettingsScreen
 import com.lockphone.ui.WizardScreen
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private enum class Screen { LOADING, WIZARD, LAUNCHER, SETTINGS }
@@ -43,20 +39,18 @@ class MainActivity : ComponentActivity() {
     private val lockPaused = mutableStateOf(false)
     private val resumeTick = mutableStateOf(0)
 
-    // 限额兜底提示（Task 15）：generation counter 防止连点时的竞态条件
-    // 每次发起启动递增，onPause 时再递增；等待中的 delay 检查 generation 是否仍匹配
-    private var launchGeneration = 0
-
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContent {
             var screen by remember { mutableStateOf(Screen.LOADING) }
             var showPinDialog by remember { mutableStateOf(false) }
-            var showLimitDialog by remember { mutableStateOf(false) }
             val whitelist by repo.whitelist.collectAsState(initial = emptySet())
             val orientationLocked by repo.orientationLocked.collectAsState(initial = true)
             val volumeLocked by repo.volumeLocked.collectAsState(initial = true)
             val pinFailures by repo.pinFailures.collectAsState(initial = emptyList())
+            val appQuota by repo.appQuota.collectAsState(initial = emptyMap())
+            val usageUsed by repo.usageUsed.collectAsState(initial = emptyMap())
+            val quotaSuspended by repo.quotaSuspended.collectAsState(initial = emptySet())
             val scope = rememberCoroutineScope()
             val allApps = remember { appList.launchableApps() }
 
@@ -83,6 +77,7 @@ class MainActivity : ComponentActivity() {
             LaunchedEffect(screen) {
                 if (screen == Screen.LAUNCHER) {
                     startForegroundService(Intent(this@MainActivity, com.lockphone.audio.VolumeGuardService::class.java))
+                    startForegroundService(Intent(this@MainActivity, com.lockphone.time.TimeGuardService::class.java))
                 }
             }
 
@@ -101,14 +96,8 @@ class MainActivity : ComponentActivity() {
                 Screen.LAUNCHER -> {
                     LauncherScreen(
                         apps = allApps.filter { it.packageName in whitelist },
-                        onLaunch = { pkg ->
-                            appList.launch(pkg)
-                            val gen = ++launchGeneration
-                            scope.launch {
-                                delay(1500)
-                                if (launchGeneration == gen) showLimitDialog = true
-                            }
-                        },
+                        suspended = quotaSuspended,
+                        onLaunch = { pkg -> appList.launch(pkg) },
                         onParentClick = { showPinDialog = true },
                     )
                     if (showPinDialog) {
@@ -127,14 +116,6 @@ class MainActivity : ComponentActivity() {
                             onDismiss = { showPinDialog = false },
                         )
                     }
-                    if (showLimitDialog) {
-                        AlertDialog(
-                            onDismissRequest = { showLimitDialog = false },
-                            title = { Text("暂时打不开") },
-                            text = { Text("该应用今日可能已达使用限额，请稍后再试或让家长检查。") },
-                            confirmButton = { TextButton(onClick = { showLimitDialog = false }) { Text("知道了") } },
-                        )
-                    }
                 }
                 Screen.SETTINGS -> SettingsScreen(
                     allApps = allApps,
@@ -144,6 +125,11 @@ class MainActivity : ComponentActivity() {
                             val next = if (checked) whitelist + pkg else whitelist - pkg
                             repo.setWhitelist(next)
                             lock.applyPolicies(next)
+                            // 取消白名单后无法再管理其限时，若正挂起则解挂避免永久挂死
+                            if (!checked) {
+                                repo.clearQuotaSuspended(pkg)
+                                lock.setPackageSuspended(pkg, false)
+                            }
                         }
                     },
                     onChangePin = { scope.launch { repo.setPin(it) } },
@@ -154,6 +140,7 @@ class MainActivity : ComponentActivity() {
                     },
                     onRelease = {
                         lockPaused.value = true
+                        quotaSuspended.forEach { lock.setPackageSuspended(it, false) }
                         lock.temporaryExit(this@MainActivity)
                         lock.releaseDeviceOwner()
                         finish()
@@ -164,6 +151,30 @@ class MainActivity : ComponentActivity() {
                     volumeLocked = volumeLocked,
                     onVolumeToggle = { scope.launch { repo.setVolumeLocked(it) } },
                     pinFailures = pinFailures,
+                    whitelistQuota = appQuota,
+                    usageUsed = usageUsed,
+                    quotaSuspended = quotaSuspended,
+                    onSetQuota = { pkg, minutes ->
+                        scope.launch {
+                            repo.setAppQuota(pkg, minutes)
+                            // 配额变更（尤其改为不限时）后作废旧的挂起决策，交回下一 tick 重新判定
+                            repo.clearQuotaSuspended(pkg)
+                            lock.setPackageSuspended(pkg, false)
+                        }
+                    },
+                    onAddBonus = { pkg, seconds ->
+                        scope.launch {
+                            repo.addBonus(pkg, seconds)
+                            lock.setPackageSuspended(pkg, false)
+                        }
+                    },
+                    usageAccessGranted = com.lockphone.time.hasUsageStatsAccess(this@MainActivity),
+                    onOpenUsageAccess = {
+                        startActivity(
+                            Intent(android.provider.Settings.ACTION_USAGE_ACCESS_SETTINGS)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    },
                 )
             }
         }
@@ -176,9 +187,4 @@ class MainActivity : ComponentActivity() {
         resumeTick.value++
     }
 
-    override fun onPause() {
-        super.onPause()
-        // 成功退到后台说明刚才的 launch(pkg) 生效了，递增 generation 使任何在途的延迟检查失效
-        launchGeneration++
-    }
 }

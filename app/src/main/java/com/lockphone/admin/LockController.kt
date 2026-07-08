@@ -71,6 +71,12 @@ class LockController(private val context: Context) {
         }
     }
 
+    /** Device Owner 挂起应用：阻止再次拉起、跨重启保留。绝不挂起本 APP。 */
+    fun setPackageSuspended(pkg: String, suspended: Boolean) {
+        if (!isDeviceOwner || pkg == context.packageName) return
+        dpm.setPackagesSuspended(admin, arrayOf(pkg), suspended)
+    }
+
     fun releaseDeviceOwner() {
         if (!isDeviceOwner) return
         dpm.clearUserRestriction(admin, UserManager.DISALLOW_SAFE_BOOT)

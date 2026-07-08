@@ -27,6 +27,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
@@ -38,6 +39,7 @@ import com.lockphone.apps.AppEntry
 @Composable
 fun LauncherScreen(
     apps: List<AppEntry>,
+    suspended: Set<String>,
     onLaunch: (String) -> Unit,
     onParentClick: () -> Unit,
 ) {
@@ -71,11 +73,13 @@ fun LauncherScreen(
             verticalArrangement = Arrangement.spacedBy(24.dp),
         ) {
             items(apps, key = { it.packageName }) { app ->
+                val isUsedUp = app.packageName in suspended
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     modifier = Modifier
                         .fillMaxWidth()
-                        .clickable { onLaunch(app.packageName) }
+                        .clickable(enabled = !isUsedUp) { onLaunch(app.packageName) }
+                        .alpha(if (isUsedUp) 0.35f else 1f)
                         .padding(4.dp),
                 ) {
                     Image(
@@ -84,7 +88,7 @@ fun LauncherScreen(
                         modifier = Modifier.size(56.dp),
                     )
                     Text(
-                        app.label,
+                        if (isUsedUp) "今日已用完" else app.label,
                         fontSize = 12.sp,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
