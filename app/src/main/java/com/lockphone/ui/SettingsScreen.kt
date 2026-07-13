@@ -31,6 +31,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.lockphone.apps.AppEntry
+import com.lockphone.time.TimeWindow
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -46,6 +47,12 @@ fun SettingsScreen(
     onOrientationToggle: (Boolean) -> Unit,
     volumeLocked: Boolean,
     onVolumeToggle: (Boolean) -> Unit,
+    curfewEnabled: Boolean,
+    curfewWindows: List<TimeWindow>,
+    onCurfewEnabledToggle: (Boolean) -> Unit,
+    onCurfewWindowAdd: () -> Unit,
+    onCurfewWindowUpdate: (Int, TimeWindow) -> Unit,
+    onCurfewWindowRemove: (Int) -> Unit,
     pinFailures: List<Long>,
     whitelistQuota: Map<String, Int>,
     usageUsed: Map<String, Int>,
@@ -97,6 +104,14 @@ fun SettingsScreen(
             Text("锁定音量（禁止调节音量）", modifier = Modifier.weight(1f))
             Switch(checked = volumeLocked, onCheckedChange = onVolumeToggle)
         }
+        CurfewSettingsSection(
+            enabled = curfewEnabled,
+            windows = curfewWindows,
+            onEnabledToggle = onCurfewEnabledToggle,
+            onWindowAdd = onCurfewWindowAdd,
+            onWindowUpdate = onCurfewWindowUpdate,
+            onWindowRemove = onCurfewWindowRemove,
+        )
         Text("白名单与限时（勾选后出现在孩子桌面）", modifier = Modifier.padding(vertical = 8.dp))
         LazyColumn {
             items(allApps, key = { it.packageName }) { app ->
@@ -183,6 +198,80 @@ fun SettingsScreen(
             },
             confirmButton = { TextButton(onClick = { showFailuresDialog = false }) { Text("关闭") } },
         )
+    }
+}
+
+private val HHMM_PATTERN = Regex("^([01]\\d|2[0-3]):([0-5]\\d)$")
+
+private fun hhmmToMinute(s: String): Int? =
+    HHMM_PATTERN.matchEntire(s)?.let { it.groupValues[1].toInt() * 60 + it.groupValues[2].toInt() }
+
+private fun minuteToHHmm(m: Int): String = "%02d:%02d".format(m / 60, m % 60)
+
+@Composable
+private fun CurfewSettingsSection(
+    enabled: Boolean,
+    windows: List<TimeWindow>,
+    onEnabledToggle: (Boolean) -> Unit,
+    onWindowAdd: () -> Unit,
+    onWindowUpdate: (Int, TimeWindow) -> Unit,
+    onWindowRemove: (Int) -> Unit,
+) {
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(vertical = 8.dp)) {
+        Text("限定可用时间段（时段外锁定桌面）", modifier = Modifier.weight(1f))
+        Switch(checked = enabled, onCheckedChange = onEnabledToggle)
+    }
+    if (!enabled) return
+    windows.forEachIndexed { index, window ->
+        CurfewWindowRow(
+            window = window,
+            onChange = { onWindowUpdate(index, it) },
+            onDelete = { onWindowRemove(index) },
+        )
+    }
+    if (windows.isEmpty()) {
+        Text("未添加时段 = 全天可用", fontSize = 12.sp, color = Color.Gray, modifier = Modifier.padding(start = 8.dp))
+    }
+    TextButton(onClick = onWindowAdd) { Text("＋ 添加时段") }
+}
+
+@Composable
+private fun CurfewWindowRow(
+    window: TimeWindow,
+    onChange: (TimeWindow) -> Unit,
+    onDelete: () -> Unit,
+) {
+    var startText by remember(window) { mutableStateOf(minuteToHHmm(window.startMinute)) }
+    var endText by remember(window) { mutableStateOf(minuteToHHmm(window.endMinute)) }
+    // 提交时同时取两个输入框的最新值，避免用过期的 window 字段互相覆盖；起止相同视为无效不提交
+    fun commit() {
+        val start = hhmmToMinute(startText) ?: return
+        val end = hhmmToMinute(endText) ?: return
+        if (start != end) onChange(TimeWindow(start, end))
+    }
+    Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.padding(start = 8.dp)) {
+        OutlinedTextField(
+            value = startText,
+            onValueChange = {
+                startText = it.filter { c -> c.isDigit() || c == ':' }.take(5)
+                commit()
+            },
+            label = { Text("开始") },
+            singleLine = true,
+            modifier = Modifier.width(96.dp),
+        )
+        Text("至", modifier = Modifier.padding(horizontal = 8.dp))
+        OutlinedTextField(
+            value = endText,
+            onValueChange = {
+                endText = it.filter { c -> c.isDigit() || c == ':' }.take(5)
+                commit()
+            },
+            label = { Text("结束") },
+            singleLine = true,
+            modifier = Modifier.width(96.dp),
+        )
+        TextButton(onClick = onDelete) { Text("删除") }
     }
 }
 

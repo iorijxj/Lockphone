@@ -11,6 +11,8 @@ import android.content.pm.PackageManager
 import android.os.UserManager
 import com.lockphone.MainActivity
 
+private const val TAG = "LockController"
+
 class LockController(private val context: Context) {
     private val dpm =
         context.getSystemService(Context.DEVICE_POLICY_SERVICE) as DevicePolicyManager
@@ -33,6 +35,20 @@ class LockController(private val context: Context) {
         dpm.addUserRestriction(admin, UserManager.DISALLOW_SAFE_BOOT)
         dpm.addUserRestriction(admin, UserManager.DISALLOW_FACTORY_RESET)
         setPersistentHome(true)
+        grantNotificationPermission()
+    }
+
+    /** Device Owner 自动授予本 APP 通知权限（Android 13+ 运行时权限），免用户弹窗 */
+    fun grantNotificationPermission() {
+        if (!isDeviceOwner || android.os.Build.VERSION.SDK_INT < 33) return
+        runCatching {
+            dpm.setPermissionGrantState(
+                admin,
+                context.packageName,
+                android.Manifest.permission.POST_NOTIFICATIONS,
+                DevicePolicyManager.PERMISSION_GRANT_STATE_GRANTED,
+            )
+        }.onFailure { android.util.Log.w(TAG, "自动授予通知权限失败，限额通知将降级为 Toast", it) }
     }
 
     fun enterLockTask(activity: Activity) {

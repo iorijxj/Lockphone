@@ -14,6 +14,7 @@ import android.widget.Toast
 import com.lockphone.MainActivity
 import com.lockphone.admin.LockController
 import com.lockphone.data.SettingsRepository
+import com.lockphone.data.UsageSnapshot
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -34,11 +35,14 @@ class TimeGuardService : Service() {
     private lateinit var power: PowerManager
     private lateinit var lock: LockController
     private lateinit var repo: SettingsRepository
+    private lateinit var quotaNotifier: QuotaNotifier
 
     // 前台包名跨 tick 记忆：仅在收到新的 RESUMED 事件时更新，空窗期保持不变，
     // 从而正确统计「停在应用里不动」的时长，堵住旧方案的绕过口子
     private var currentFg: String? = null
     private var lastQueryTime = 0L
+    private var lastCurfewActive: Boolean? = null
+    private var lastNotifiedPkg: String? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -46,6 +50,7 @@ class TimeGuardService : Service() {
         power = getSystemService(Context.POWER_SERVICE) as PowerManager
         lock = LockController(applicationContext)
         repo = SettingsRepository(applicationContext)
+        quotaNotifier = QuotaNotifier(applicationContext)
         lastQueryTime = System.currentTimeMillis() - INITIAL_LOOKBACK_MS
         startForeground(NOTIF_ID, buildNotification())
         scope.launch { loop() }
@@ -58,10 +63,13 @@ class TimeGuardService : Service() {
             val snapshot = repo.usageSnapshot()
             val interactive = power.isInteractive
             val fg = if (!interactive) null else currentFg?.takeIf { it != packageName }
+            val now = System.currentTimeMillis()
+
+            handleCurfew(now, fg)
 
             val out = TimeAccountant.tick(
                 TickInput(
-                    nowMillis = System.currentTimeMillis(),
+                    nowMillis = now,
                     zoneId = ZoneId.systemDefault(),
                     storedDate = snapshot.date,
                     usedSeconds = snapshot.used,
@@ -86,6 +94,9 @@ class TimeGuardService : Service() {
                 repo.applyUsage(out.date, out.usedSeconds, out.bonusSeconds, out.suspended)
             }
 
+            notifyIfNewlyActivated(fg, snapshot, out)
+            lastNotifiedPkg = fg
+
             delay(TICK_SECONDS * 1000L)
         }
     }
@@ -104,21 +115,43 @@ class TimeGuardService : Service() {
 
     private fun enforce(pkg: String) {
         lock.setPackageSuspended(pkg, true)
+        kickToLauncher()
+        Toast.makeText(this, "「${appLabel(this, pkg)}」今天的时间用完啦", Toast.LENGTH_LONG).show()
+    }
+
+    private fun kickToLauncher() {
         startActivity(
             Intent(this, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
         )
-        Toast.makeText(this, "「${labelOf(pkg)}」今天的时间用完啦", Toast.LENGTH_LONG).show()
+    }
+
+    /** 非授权时段：写回状态供 UI 观察，并把仍在前台的应用踢回锁定页 */
+    private suspend fun handleCurfew(now: Long, fg: String?) {
+        val snap = repo.curfewSnapshot()
+        val out = CurfewPolicy.evaluate(
+            CurfewInput(now, ZoneId.systemDefault(), snap.enabled, snap.windows, snap.tempUnlockUntil),
+        )
+        if (out.curfewActive != lastCurfewActive) {
+            repo.setCurfewActive(out.curfewActive)
+            lastCurfewActive = out.curfewActive
+        }
+        if (out.curfewActive && fg != null) kickToLauncher()
+    }
+
+    /** 受限应用切到前台的那个 tick，弹一次醒目限额通知 */
+    private fun notifyIfNewlyActivated(fg: String?, snapshot: UsageSnapshot, out: TickOutput) {
+        if (fg == null || fg == lastNotifiedPkg) return
+        val quotaMin = snapshot.quota[fg] ?: return
+        if (fg in out.suspended) return
+        val usedSec = out.usedSeconds[fg] ?: 0
+        val bonusSec = out.bonusSeconds[fg] ?: 0
+        val remainingMin = ((quotaMin * 60 + bonusSec - usedSec + 59) / 60).coerceAtLeast(0)
+        quotaNotifier.notifyActivated(fg, quotaMin, remainingMin)
     }
 
     private fun warn(pkg: String, remainingMin: Int) {
-        Toast.makeText(this, "「${labelOf(pkg)}」还剩 $remainingMin 分钟", Toast.LENGTH_LONG).show()
+        quotaNotifier.notifyWarning(pkg, remainingMin)
     }
-
-    private fun labelOf(pkg: String): String =
-        runCatching {
-            val pm = packageManager
-            pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
-        }.getOrDefault(pkg)
 
     private fun buildNotification(): Notification {
         val mgr = getSystemService(NotificationManager::class.java)

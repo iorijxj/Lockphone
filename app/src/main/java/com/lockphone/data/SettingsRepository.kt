@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.core.stringSetPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.lockphone.security.PinHasher
+import com.lockphone.time.TimeWindow
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
@@ -35,6 +36,21 @@ private fun decodeIntMap(s: String?): Map<String, Int> =
         ?.toMap()
         ?: emptyMap()
 
+private fun encodeWindows(list: List<TimeWindow>): String =
+    list.joinToString(",") { "${it.startMinute}-${it.endMinute}" }
+
+private fun decodeWindows(s: String?): List<TimeWindow> =
+    s?.split(",")
+        ?.filter { it.isNotBlank() }
+        ?.mapNotNull { entry ->
+            val p = entry.split("-")
+            if (p.size != 2) return@mapNotNull null
+            val start = p[0].toIntOrNull() ?: return@mapNotNull null
+            val end = p[1].toIntOrNull() ?: return@mapNotNull null
+            TimeWindow(start.coerceIn(0, 1439), end.coerceIn(0, 1439))
+        }
+        ?: emptyList()
+
 /** 计时状态快照，供前台服务一次读齐 */
 data class UsageSnapshot(
     val date: String,
@@ -42,6 +58,13 @@ data class UsageSnapshot(
     val bonus: Map<String, Int>,
     val suspended: Set<String>,
     val quota: Map<String, Int>,
+)
+
+/** 可用时段配置快照，供前台服务一次读齐 */
+data class CurfewSnapshot(
+    val enabled: Boolean,
+    val windows: List<TimeWindow>,
+    val tempUnlockUntil: Long,
 )
 
 class SettingsRepository(private val context: Context) {
@@ -58,6 +81,10 @@ class SettingsRepository(private val context: Context) {
         val USAGE_USED = stringPreferencesKey("usage_used")
         val BONUS_TODAY = stringPreferencesKey("bonus_today")
         val QUOTA_SUSPENDED = stringSetPreferencesKey("quota_suspended")
+        val CURFEW_ENABLED = booleanPreferencesKey("curfew_enabled")
+        val CURFEW_WINDOWS = stringPreferencesKey("curfew_windows")
+        val CURFEW_TEMP_UNLOCK_UNTIL = longPreferencesKey("curfew_temp_unlock_until")
+        val CURFEW_ACTIVE = booleanPreferencesKey("curfew_active")
     }
 
     val whitelist: Flow<Set<String>> =
@@ -187,5 +214,60 @@ class SettingsRepository(private val context: Context) {
             prefs[Keys.BONUS_TODAY] = encodeIntMap(bonus)
             prefs[Keys.QUOTA_SUSPENDED] = (prefs[Keys.QUOTA_SUSPENDED] ?: emptySet()) - pkg
         }
+    }
+
+    val curfewEnabled: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.CURFEW_ENABLED] ?: false }
+
+    suspend fun setCurfewEnabled(enabled: Boolean) {
+        context.dataStore.edit { it[Keys.CURFEW_ENABLED] = enabled }
+    }
+
+    val curfewWindows: Flow<List<TimeWindow>> =
+        context.dataStore.data.map { decodeWindows(it[Keys.CURFEW_WINDOWS]) }
+
+    // 时段增/改/删都在单个 edit 事务内读改写，避免 UI 用过期列表快照互相覆盖
+    suspend fun addCurfewWindow(window: TimeWindow) {
+        context.dataStore.edit { prefs ->
+            prefs[Keys.CURFEW_WINDOWS] = encodeWindows(decodeWindows(prefs[Keys.CURFEW_WINDOWS]) + window)
+        }
+    }
+
+    suspend fun updateCurfewWindow(index: Int, window: TimeWindow) {
+        context.dataStore.edit { prefs ->
+            val list = decodeWindows(prefs[Keys.CURFEW_WINDOWS])
+            if (index !in list.indices) return@edit
+            prefs[Keys.CURFEW_WINDOWS] =
+                encodeWindows(list.mapIndexed { i, w -> if (i == index) window else w })
+        }
+    }
+
+    suspend fun removeCurfewWindow(index: Int) {
+        context.dataStore.edit { prefs ->
+            val list = decodeWindows(prefs[Keys.CURFEW_WINDOWS])
+            prefs[Keys.CURFEW_WINDOWS] = encodeWindows(list.filterIndexed { i, _ -> i != index })
+        }
+    }
+
+    // 当前是否处于非授权时段（由 TimeGuardService 每 tick 计算写回，UI 只读观察）
+    val curfewActive: Flow<Boolean> =
+        context.dataStore.data.map { it[Keys.CURFEW_ACTIVE] ?: false }.distinctUntilChanged()
+
+    suspend fun setCurfewActive(active: Boolean) {
+        context.dataStore.edit { it[Keys.CURFEW_ACTIVE] = active }
+    }
+
+    /** 家长临时解锁截止时间戳（绝对时间，跨重启生效） */
+    suspend fun setTempUnlockUntil(untilMillis: Long) {
+        context.dataStore.edit { it[Keys.CURFEW_TEMP_UNLOCK_UNTIL] = untilMillis }
+    }
+
+    suspend fun curfewSnapshot(): CurfewSnapshot {
+        val prefs = context.dataStore.data.first()
+        return CurfewSnapshot(
+            enabled = prefs[Keys.CURFEW_ENABLED] ?: false,
+            windows = decodeWindows(prefs[Keys.CURFEW_WINDOWS]),
+            tempUnlockUntil = prefs[Keys.CURFEW_TEMP_UNLOCK_UNTIL] ?: 0L,
+        )
     }
 }
